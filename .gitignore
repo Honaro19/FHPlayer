@@ -1,2 +1,8 @@
 __pycache__/
 *.py[cod]
+build/
+dist/
+FHPlayerMobile/node_modules/
+FHPlayerMobile/android/.gradle/
+FHPlayerMobile/android/app/build/
+FHPlayerMobile/android/local.properties

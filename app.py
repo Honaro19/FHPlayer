@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
+import ipaddress
 import ssl
 import subprocess
-import time
+import sys
 import webbrowser
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -13,50 +13,82 @@ from pathlib import Path
 from typing import Any
 from urllib import error as urlerror
 from urllib import request as urlrequest
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 
 HOST = "127.0.0.1"
 PORT = 8765
-STATIC_DIR = Path(__file__).parent / "static"
+BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+STATIC_DIR = BASE_DIR / "static"
 
 
-def run_command(command: str, shell_name: str, timeout_seconds: float) -> dict[str, Any]:
-    started = time.perf_counter()
+def resolve_app_data_dir() -> Path:
+    if sys.platform == "win32":
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / "FHPlayer"
+    return Path.home() / ".fhplayer"
 
-    if shell_name == "powershell":
-        process = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", command],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    elif shell_name == "cmd":
-        process = subprocess.run(
-            ["cmd", "/c", command],
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
-    else:
-        process = subprocess.run(
-            shlex.split(command),
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
 
-    duration_ms = round((time.perf_counter() - started) * 1000, 1)
+APP_DATA_DIR = resolve_app_data_dir()
+LIBRARY_ROOT = APP_DATA_DIR / "Library"
+LIBRARY_DIRECTORIES = {
+    "video": LIBRARY_ROOT / "Videos",
+    "videos": LIBRARY_ROOT / "Videos",
+    "funscript": LIBRARY_ROOT / "Funscripts",
+    "funscripts": LIBRARY_ROOT / "Funscripts",
+    "export": LIBRARY_ROOT / "Exports",
+    "exports": LIBRARY_ROOT / "Exports",
+}
+
+
+def ensure_library_directories() -> None:
+    for directory in {APP_DATA_DIR, LIBRARY_ROOT, *LIBRARY_DIRECTORIES.values()}:
+        directory.mkdir(parents=True, exist_ok=True)
+
+
+def sanitize_library_filename(file_name: str) -> str:
+    normalized = Path(str(file_name or "").replace("\\", "/")).name.strip()
+    safe_name = "".join(character for character in normalized if character not in '<>:"/\\|?*').strip(" .")
+    if not safe_name:
+        raise ValueError("A valid filename is required")
+    return safe_name
+
+
+def resolve_library_directory(kind: str) -> Path:
+    normalized_kind = str(kind or "").strip().lower()
+    directory = LIBRARY_DIRECTORIES.get(normalized_kind)
+    if directory is None:
+        raise ValueError("Unsupported library kind")
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def build_library_payload() -> dict[str, Any]:
     return {
-        "returnCode": process.returncode,
-        "stdout": process.stdout.strip(),
-        "stderr": process.stderr.strip(),
-        "durationMs": duration_ms,
+        "ok": True,
+        "platform": "desktop",
+        "rootPath": str(LIBRARY_ROOT),
+        "directories": {
+            "videos": str(LIBRARY_DIRECTORIES["videos"]),
+            "funscripts": str(LIBRARY_DIRECTORIES["funscripts"]),
+            "exports": str(LIBRARY_DIRECTORIES["exports"]),
+        },
+        "capabilities": {
+            "import": True,
+            "reveal": True,
+        },
     }
 
+
+def open_in_file_manager(path: Path) -> None:
+    if sys.platform == "win32":
+        os.startfile(str(path))  # type: ignore[attr-defined]
+        return
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", str(path)])
+        return
+    subprocess.Popen(["xdg-open", str(path)])
 
 def parse_json_body(handler: SimpleHTTPRequestHandler) -> dict[str, Any]:
     try:
@@ -114,11 +146,30 @@ def normalize_lovense_toys(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def lovense_request(config: dict[str, Any], payload: dict[str, Any], timeout_seconds: float = 5.0) -> dict[str, Any]:
+def extract_lovense_ipv4(host: str) -> str | None:
+    normalized = str(host or "").strip().lower()
+    if not normalized:
+        return None
+
+    candidate = normalized.removesuffix(".lovense.club")
+    if "-" in candidate and "." not in candidate:
+        candidate = candidate.replace("-", ".")
+
+    try:
+        parsed = ipaddress.ip_address(candidate)
+    except ValueError:
+        return None
+
+    if parsed.version != 4:
+        return None
+
+    return str(parsed)
+
+
+def build_lovense_request_candidates(config: dict[str, Any]) -> list[tuple[str, str, str]]:
     scheme = str(config.get("scheme", "https")).strip().lower() or "https"
     host = str(config.get("host", "")).strip()
     port = str(config.get("port", "")).strip()
-    platform_name = str(config.get("platformName", "FHPlayer")).strip() or "FHPlayer"
 
     if not host:
         raise ValueError("Lovense host is required")
@@ -127,7 +178,34 @@ def lovense_request(config: dict[str, Any], payload: dict[str, Any], timeout_sec
     if scheme not in {"http", "https"}:
         raise ValueError("Lovense scheme must be http or https")
 
-    url = f"{scheme}://{host}:{port}/command"
+    ipv4 = extract_lovense_ipv4(host)
+    seen: set[tuple[str, str, str]] = set()
+    candidates: list[tuple[str, str, str]] = []
+
+    def add_candidate(candidate_scheme: str, candidate_host: str, candidate_port: str) -> None:
+        normalized_candidate = (candidate_scheme, candidate_host.strip(), str(candidate_port).strip())
+        if not normalized_candidate[1] or not normalized_candidate[2] or normalized_candidate in seen:
+            return
+        seen.add(normalized_candidate)
+        candidates.append(normalized_candidate)
+
+    add_candidate(scheme, host, port)
+
+    if ipv4:
+        dashed_host = f"{ipv4.replace('.', '-')}.lovense.club"
+        dotted_host = f"{ipv4}.lovense.club"
+        for https_host in (dashed_host, dotted_host):
+            add_candidate("https", https_host, port)
+            add_candidate("https", https_host, "30010")
+        add_candidate("https", ipv4, port)
+        add_candidate("https", ipv4, "30010")
+        add_candidate("http", ipv4, port)
+        add_candidate("http", ipv4, "20010")
+
+    return candidates
+
+
+def execute_lovense_request(url: str, platform_name: str, payload: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
     request = urlrequest.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -138,35 +216,80 @@ def lovense_request(config: dict[str, Any], payload: dict[str, Any], timeout_sec
         method="POST",
     )
 
-    context = ssl._create_unverified_context() if scheme == "https" else None
+    context = ssl._create_unverified_context() if url.startswith("https://") else None
     with urlrequest.urlopen(request, timeout=timeout_seconds, context=context) as response:
         body = response.read().decode("utf-8")
 
     return json.loads(body)
 
 
+def lovense_request(
+    config: dict[str, Any],
+    payload: dict[str, Any],
+    timeout_seconds: float = 5.0,
+) -> tuple[dict[str, Any], str]:
+    platform_name = str(config.get("platformName", "FHPlayer")).strip() or "FHPlayer"
+    candidates = build_lovense_request_candidates(config)
+    errors: list[str] = []
+    last_error: Exception | None = None
+
+    for scheme, host, port in candidates:
+        url = f"{scheme}://{host}:{port}/command"
+        try:
+            return execute_lovense_request(url, platform_name, payload, timeout_seconds), url
+        except Exception as exc:
+            last_error = exc
+            errors.append(f"{url}: {exc}")
+
+    if last_error is None:
+        raise RuntimeError("No Lovense request candidates were generated")
+
+    error_summary = " | ".join(errors[-4:])
+    if isinstance(last_error, TimeoutError):
+        raise TimeoutError(f"{last_error}. Tried: {error_summary}") from last_error
+    if isinstance(last_error, urlerror.URLError):
+        raise urlerror.URLError(f"{last_error}. Tried: {error_summary}")
+    raise RuntimeError(f"{last_error}. Tried: {error_summary}") from last_error
+
+
 class FHPlayerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
 
+    def end_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/health":
-            self._send_json({"ok": True, "port": PORT})
+            self._send_json(
+                {
+                    "ok": True,
+                    "port": PORT,
+                    "platform": "desktop",
+                    "capabilities": {
+                        "lovense": True,
+                    },
+                }
+            )
+            return
+        if parsed.path == "/api/library/info":
+            self._send_json(build_library_payload())
             return
 
         if parsed.path == "/":
             self.path = "/index.html"
+        elif parsed.path == "/app.js":
+            self.path = "/playlist-app.js"
 
         super().do_GET()
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         route = parsed.path.rstrip("/") or "/"
-
-        if route == "/api/execute":
-            self._handle_execute()
-            return
 
         if route in {"/api/lovense/detect", "/api/lovense-detect"}:
             self._handle_lovense_detect()
@@ -175,82 +298,19 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
         if route in {"/api/lovense/command", "/api/lovense-command"}:
             self._handle_lovense_command()
             return
+        if route == "/api/library/open":
+            self._handle_library_open(parsed)
+            return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Unknown API route")
 
-    def _handle_execute(self) -> None:
-        try:
-            payload = parse_json_body(self)
-        except ValueError as exc:
-            self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+    def do_PUT(self) -> None:
+        parsed = urlparse(self.path)
+        route = parsed.path.rstrip("/") or "/"
+        if route == "/api/library/import":
+            self._handle_library_import(parsed)
             return
-
-        command = str(payload.get("command", "")).strip()
-        shell_name = str(payload.get("shell", "powershell")).strip().lower()
-        dry_run = bool(payload.get("dryRun", False))
-        timeout_seconds = float(payload.get("timeoutSeconds", 5))
-        event = payload.get("event", {})
-
-        if not command:
-            self.send_error(HTTPStatus.BAD_REQUEST, "Command is required")
-            return
-
-        if timeout_seconds <= 0 or timeout_seconds > 60:
-            self.send_error(HTTPStatus.BAD_REQUEST, "timeoutSeconds must be between 0 and 60")
-            return
-
-        response: dict[str, Any] = {
-            "ok": True,
-            "dryRun": dry_run,
-            "shell": shell_name,
-            "command": command,
-            "event": event,
-        }
-
-        if dry_run:
-            response["result"] = {
-                "returnCode": 0,
-                "stdout": "Dry run enabled. Command was not executed.",
-                "stderr": "",
-                "durationMs": 0,
-            }
-            self._send_json(response)
-            return
-
-        try:
-            response["result"] = run_command(command, shell_name, timeout_seconds)
-        except subprocess.TimeoutExpired:
-            response["ok"] = False
-            response["result"] = {
-                "returnCode": -1,
-                "stdout": "",
-                "stderr": f"Command exceeded timeout of {timeout_seconds} seconds.",
-                "durationMs": round(timeout_seconds * 1000, 1),
-            }
-            self._send_json(response, status=HTTPStatus.REQUEST_TIMEOUT)
-            return
-        except FileNotFoundError as exc:
-            response["ok"] = False
-            response["result"] = {
-                "returnCode": -1,
-                "stdout": "",
-                "stderr": str(exc),
-                "durationMs": 0,
-            }
-            self._send_json(response, status=HTTPStatus.BAD_REQUEST)
-            return
-        except Exception as exc:  # pragma: no cover - last-resort guard for UI errors
-            response["ok"] = False
-            response["result"] = {
-                "returnCode": -1,
-                "stdout": "",
-                "stderr": str(exc),
-                "durationMs": 0,
-            }
-            self._send_json(response, status=HTTPStatus.INTERNAL_SERVER_ERROR)
-            return
-
-        self._send_json(response)
+        self.send_error(HTTPStatus.NOT_FOUND, "Unknown API route")
 
     def _handle_lovense_detect(self) -> None:
         try:
@@ -262,7 +322,7 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
         config = payload.get("config", {})
         timeout_seconds = float(payload.get("timeoutSeconds", 5))
         try:
-            result = lovense_request(config, {"command": "GetToys"}, timeout_seconds=timeout_seconds)
+            result, resolved_endpoint = lovense_request(config, {"command": "GetToys"}, timeout_seconds=timeout_seconds)
             normalized = normalize_lovense_toys(result)
         except ValueError as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
@@ -277,7 +337,7 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
-        self._send_json({"ok": True, "result": result, "normalized": normalized})
+        self._send_json({"ok": True, "result": result, "normalized": normalized, "resolvedEndpoint": resolved_endpoint})
 
     def _handle_lovense_command(self) -> None:
         try:
@@ -296,8 +356,8 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
         results = []
         try:
             for command_payload in commands:
-                result = lovense_request(config, command_payload, timeout_seconds=timeout_seconds)
-                results.append({"request": command_payload, "response": result})
+                result, resolved_endpoint = lovense_request(config, command_payload, timeout_seconds=timeout_seconds)
+                results.append({"request": command_payload, "response": result, "resolvedEndpoint": resolved_endpoint})
         except ValueError as exc:
             self._send_json({"ok": False, "error": str(exc), "results": results}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -312,6 +372,51 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
             return
 
         self._send_json({"ok": True, "results": results})
+
+    def _handle_library_import(self, parsed: Any) -> None:
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            target_directory = resolve_library_directory(query.get("kind", [""])[0])
+            file_name = sanitize_library_filename(query.get("filename", [""])[0])
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        if content_length < 0:
+            self._send_json({"ok": False, "error": "Invalid Content-Length"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        destination = target_directory / file_name
+        try:
+            body = self.rfile.read(content_length)
+            destination.write_bytes(body)
+        except OSError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self._send_json(
+            {
+                "ok": True,
+                "path": str(destination),
+                "fileName": destination.name,
+                "sizeBytes": destination.stat().st_size,
+            }
+        )
+
+    def _handle_library_open(self, parsed: Any) -> None:
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            target_directory = resolve_library_directory(query.get("kind", ["videos"])[0])
+            open_in_file_manager(target_directory)
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except OSError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self._send_json({"ok": True, "path": str(target_directory)})
 
     def log_message(self, format: str, *args: Any) -> None:
         message = "%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format % args)
@@ -328,24 +433,43 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
 
 
 def main() -> None:
-    if not STATIC_DIR.exists():
-        raise SystemExit(f"Missing static assets in {STATIC_DIR}")
-
-    server = ThreadingHTTPServer((HOST, PORT), FHPlayerHandler)
-    url = f"http://{HOST}:{PORT}"
-
-    print(f"FHPlayer is running at {url}")
-    print("Press Ctrl+C to stop.")
-
-    if not os.environ.get("FHPLAYER_NO_BROWSER"):
-        webbrowser.open(url)
-
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nShutting down server.")
-    finally:
-        server.server_close()
+        ensure_library_directories()
+        if not STATIC_DIR.exists():
+            error_msg = f"Missing static assets in {STATIC_DIR}\nBASE_DIR: {BASE_DIR}\nCwd: {os.getcwd()}"
+            raise SystemExit(error_msg)
+
+        server = ThreadingHTTPServer((HOST, PORT), FHPlayerHandler)
+        url = f"http://{HOST}:{PORT}"
+
+        print(f"FHPlayer is running at {url}")
+        print(f"Library root: {LIBRARY_ROOT}")
+        print("Press Ctrl+C to stop.")
+
+        if not os.environ.get("FHPLAYER_NO_BROWSER"):
+            webbrowser.open(url)
+
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\nShutting down server.")
+        finally:
+            server.server_close()
+    except Exception as e:
+        error_msg = f"Error: {type(e).__name__}: {e}"
+        print(error_msg, flush=True)
+
+        error_log = Path.home() / "Desktop" / "FHPlayer_error.log"
+        try:
+            error_log.write_text(error_msg)
+            print(f"Error log written to {error_log}", flush=True)
+        except Exception:
+            pass
+
+        if sys.platform == "win32":
+            import time
+            time.sleep(5)
+        raise
 
 
 if __name__ == "__main__":
