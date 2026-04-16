@@ -59,7 +59,7 @@ build_windows.cmd
 ```
 
 The result is written to `dist\FHPlayer\FHPlayer.exe`.
-If OneDrive or Windows blocks writing into the project folder, the script keeps the finished build in `%TEMP%\FHPlayer-PyInstaller\dist\FHPlayer\FHPlayer.exe`.
+If copying the finished build back into the project folder fails, the script keeps the working output in `%TEMP%\FHPlayer-PyInstaller-<timestamp>\dist\FHPlayer\FHPlayer.exe`.
 
 The Windows build now also uses `assets\branding\fhplayer.ico`. If that icon file does not exist yet, `build_windows.ps1` generates a branded placeholder icon automatically.
 
@@ -115,7 +115,7 @@ FHPlayerMobile\android\build_debug_apk.cmd
 The APK is written to:
 
 ```text
-FHPlayerMobile\android\app\build\outputs\apk\debug\app-debug.apk
+%LOCALAPPDATA%\FHPlayer\AndroidBuild\app\outputs\apk\debug\app-debug.apk
 ```
 
 Install the APK onto a connected emulator or Android device with:

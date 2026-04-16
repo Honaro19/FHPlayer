@@ -179,25 +179,6 @@ class LocalHttpServer(
                 handleDocumentSelection(requestUri, output)
             }
 
-            request.method == "POST" && path == "/api/execute" -> {
-                respondJson(
-                    output,
-                    HTTP_NOT_IMPLEMENTED,
-                    JSONObject()
-                        .put("ok", false)
-                        .put("shell", "android")
-                        .put("error", "Shell execution is not available in the Android app build.")
-                        .put(
-                            "result",
-                            JSONObject()
-                                .put("returnCode", -1)
-                                .put("stdout", "")
-                                .put("stderr", "Shell execution is not available in the Android app build.")
-                                .put("durationMs", 0),
-                        ),
-                )
-            }
-
             request.method == "POST" && (path == "/api/lovense/detect" || path == "/api/lovense-detect") -> {
                 handleLovenseDetect(request, output)
             }
@@ -245,8 +226,7 @@ class LocalHttpServer(
             "", "/" -> "www/index.html"
             else -> {
                 val requestedPath = path.removePrefix("/")
-                val relativePath = if (requestedPath == "app.js") "playlist-app.js" else requestedPath
-                if (relativePath.contains("..")) {
+                if (requestedPath.contains("..")) {
                     respondJson(
                         output,
                         HTTP_BAD_REQUEST,
@@ -256,7 +236,7 @@ class LocalHttpServer(
                     )
                     return
                 }
-                "www/$relativePath"
+                "www/$requestedPath"
             }
         }
 

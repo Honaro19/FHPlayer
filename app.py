@@ -282,8 +282,6 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
 
         if parsed.path == "/":
             self.path = "/index.html"
-        elif parsed.path == "/app.js":
-            self.path = "/playlist-app.js"
 
         super().do_GET()
 
