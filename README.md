@@ -31,6 +31,8 @@ python app.py
 
 After that, the app is available at `http://127.0.0.1:8765`. The browser opens automatically by default.
 
+The project version is defined centrally in `VERSION`.
+
 On startup FHPlayer creates a managed library under:
 
 - Windows desktop: `%LOCALAPPDATA%\FHPlayer\Library\Videos`, `%LOCALAPPDATA%\FHPlayer\Library\Funscripts`, `%LOCALAPPDATA%\FHPlayer\Library\Exports`
@@ -50,6 +52,12 @@ Create the executable:
 
 ```powershell
 .\build_windows.ps1
+```
+
+Or send the generated `dist\` and `build\` folders somewhere else:
+
+```powershell
+.\build_windows.ps1 -OutputRoot .tmp\windows-build -TempRoot .tmp\windows-temp
 ```
 
 Or with double-click / Command Prompt:
@@ -76,6 +84,12 @@ You can build a per-user Windows installer with Inno Setup 6:
 .\build_windows_installer.ps1
 ```
 
+To keep both the EXE build and the final installer output outside the project tree:
+
+```powershell
+.\build_windows_installer.ps1 -OutputDir .tmp\installer-output -WindowsBuildOutputRoot .tmp\installer-build -TempRoot .tmp\installer-temp
+```
+
 Or with double-click / Command Prompt:
 
 ```cmd
@@ -91,7 +105,7 @@ The installer:
 The setup executable is written to:
 
 ```text
-dist-installer\FHPlayer-Setup.exe
+installers\windows\FHPlayer-Setup.exe
 ```
 
 ## Mobile Version
@@ -106,6 +120,12 @@ Build the debug APK with:
 FHPlayerMobile\android\build_debug_apk.ps1
 ```
 
+To write the Gradle build output somewhere else:
+
+```powershell
+FHPlayerMobile\android\build_debug_apk.ps1 -BuildDir .tmp\android-build\app -OutputDir .tmp\android-output
+```
+
 Or with double-click / Command Prompt:
 
 ```cmd
@@ -115,13 +135,19 @@ FHPlayerMobile\android\build_debug_apk.cmd
 The APK is written to:
 
 ```text
-%LOCALAPPDATA%\FHPlayer\AndroidBuild\app\outputs\apk\debug\app-debug.apk
+installers\android\FHPlayer-<version>-debug.apk
 ```
 
 Install the APK onto a connected emulator or Android device with:
 
 ```powershell
 FHPlayerMobile\android\install_debug_apk.ps1 -LaunchApp
+```
+
+If you built the APK into a custom directory, pass the same build path during install:
+
+```powershell
+FHPlayerMobile\android\install_debug_apk.ps1 -ApkPath .tmp\android-output\FHPlayer-<version>-debug.apk -LaunchApp
 ```
 
 Or with double-click / Command Prompt:
@@ -136,6 +162,38 @@ Current Android limitations:
 - Video and `.funscript` pairing still works once both files are selected, but Android does not automatically scan sibling files from the filesystem by filename.
 - The Android installer artifact is the APK itself. For a distributable release build, add a release keystore and build a signed release APK.
 - On first app start FHPlayer creates the managed `Library\Videos`, `Library\Funscripts`, and `Library\Exports` folders inside the app storage area.
+
+## Smoke Tests
+
+Run the reusable smoke-test runner with:
+
+```powershell
+.\scripts\smoke_test.ps1
+```
+
+By default it tests the desktop Python app, the built Windows EXE, the Windows installer, and the Android APK build. When exactly one adb device or emulator is connected, it also installs and launches the Android app.
+
+Useful options:
+
+- `-SkipWindowsInstaller`
+- `-SkipAndroid`
+- `-SkipAndroidInstall`
+- `-AndroidDeviceSerial emulator-5554`
+- `-KeepArtifacts`
+
+## Rule Tests
+
+Run the Lovense rule-engine tests with:
+
+```powershell
+.\scripts\test_rule_engine.ps1
+```
+
+Or directly with npm:
+
+```powershell
+npm run test:rules
+```
 
 ## Usage
 

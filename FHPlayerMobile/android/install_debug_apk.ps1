@@ -1,9 +1,44 @@
 param(
+  [string]$BuildDir = "",
+  [string]$ApkPath = "",
   [string]$DeviceSerial = "",
   [switch]$LaunchApp
 )
 
 $ErrorActionPreference = "Stop"
+
+function Resolve-AbsolutePath {
+  param(
+    [string]$Path,
+    [string]$BasePath
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    return $null
+  }
+
+  if ([System.IO.Path]::IsPathRooted($Path)) {
+    return [System.IO.Path]::GetFullPath($Path)
+  }
+
+  return [System.IO.Path]::GetFullPath((Join-Path $BasePath $Path))
+}
+
+function Get-AppVersion {
+  param([string]$ProjectRoot)
+
+  $versionPath = Join-Path $ProjectRoot "VERSION"
+  if (-not (Test-Path $versionPath)) {
+    throw "Missing VERSION file at $versionPath"
+  }
+
+  $appVersion = (Get-Content -LiteralPath $versionPath -Raw).Trim()
+  if ($appVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "VERSION must use major.minor.patch. Found: $appVersion"
+  }
+
+  return $appVersion
+}
 
 function Resolve-AdbPath {
   $sdkAdb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
@@ -54,8 +89,19 @@ function Get-AdbOnlineDevices {
 
 try {
   $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-  $buildDir = Join-Path $env:LOCALAPPDATA "FHPlayer\AndroidBuild\app"
-  $apkPath = Join-Path $buildDir "outputs\apk\debug\app-debug.apk"
+  $projectRoot = Split-Path -Parent (Split-Path -Parent $scriptRoot)
+  $appVersion = Get-AppVersion -ProjectRoot $projectRoot
+  $workingDirectory = (Get-Location).Path
+  $resolvedBuildDir = if ($BuildDir) {
+    Resolve-AbsolutePath -Path $BuildDir -BasePath $workingDirectory
+  } else {
+    Join-Path $env:LOCALAPPDATA "FHPlayer\AndroidBuild\app"
+  }
+  $resolvedApkPath = if ($ApkPath) {
+    Resolve-AbsolutePath -Path $ApkPath -BasePath $workingDirectory
+  } else {
+    Join-Path $projectRoot "installers\android\FHPlayer-$appVersion-debug.apk"
+  }
   $adbPath = Resolve-AdbPath
   $onlineDevices = @(Get-AdbOnlineDevices -AdbPath $adbPath)
   $onlineDeviceSummary = if ($onlineDevices.Count) { $onlineDevices -join ", " } else { "none" }
@@ -70,19 +116,23 @@ try {
     throw "Multiple adb devices are connected ($onlineDeviceSummary). Use -DeviceSerial to choose one."
   }
 
-  if (-not (Test-Path $apkPath)) {
+  if (-not (Test-Path $resolvedApkPath)) {
+    if ($ApkPath) {
+      throw "No debug APK was found at $resolvedApkPath"
+    }
+
     $env:FHPLAYER_NO_PAUSE = "1"
-    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scriptRoot "build_debug_apk.ps1")
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $scriptRoot "build_debug_apk.ps1") -BuildDir $resolvedBuildDir
     if ($LASTEXITCODE -ne 0) {
       throw "APK build failed."
     }
   }
 
-  if (-not (Test-Path $apkPath)) {
-    throw "No debug APK was found at $apkPath"
+  if (-not (Test-Path $resolvedApkPath)) {
+    throw "No debug APK was found at $resolvedApkPath"
   }
 
-  Invoke-Adb -AdbPath $adbPath -Arguments @("install", "-r", $apkPath)
+  Invoke-Adb -AdbPath $adbPath -Arguments @("install", "-r", $resolvedApkPath)
   if ($LASTEXITCODE -ne 0) {
     throw "adb install failed."
   }
@@ -96,7 +146,7 @@ try {
 
   Write-Host ""
   Write-Host "FHPlayer debug APK installed successfully."
-  Write-Host "APK: $apkPath"
+  Write-Host "APK: $resolvedApkPath"
   if ($DeviceSerial) {
     Write-Host "Device: $DeviceSerial"
   }

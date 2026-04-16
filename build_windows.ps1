@@ -1,3 +1,8 @@
+param(
+  [string]$OutputRoot = "",
+  [string]$TempRoot = ""
+)
+
 $ErrorActionPreference = "Stop"
 
 function Wait-BeforeExit {
@@ -17,23 +22,52 @@ function Resolve-PythonLauncher {
   throw "Python launcher not found. Install Python 3.10+ first."
 }
 
+function Resolve-AbsolutePath {
+  param(
+    [string]$Path,
+    [string]$BasePath
+  )
+
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    return $null
+  }
+
+  if ([System.IO.Path]::IsPathRooted($Path)) {
+    return [System.IO.Path]::GetFullPath($Path)
+  }
+
+  return [System.IO.Path]::GetFullPath((Join-Path $BasePath $Path))
+}
+
+function Normalize-DirectoryPath {
+  param([string]$Path)
+
+  return ([System.IO.Path]::GetFullPath($Path)).TrimEnd([char[]]@('\', '/'))
+}
+
 try {
   $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
   $staticDir = Join-Path $projectRoot "static"
   $staticBundleFiles = @("index.html", "styles.css", "playlist-app.js")
   $brandingScript = Join-Path $projectRoot "assets\\branding\\generate_brand_assets.ps1"
   $iconPath = Join-Path $projectRoot "assets\\branding\\fhplayer.ico"
-  $distDir = Join-Path $projectRoot "dist"
-  $buildDir = Join-Path $projectRoot "build"
   $buildToken = Get-Date -Format "yyyyMMdd-HHmmss"
-  $tempRoot = Join-Path $env:TEMP "FHPlayer-PyInstaller-$buildToken"
-  $tempDistDir = Join-Path $tempRoot "dist"
-  $tempBuildDir = Join-Path $tempRoot "build"
-  $tempStaticDir = Join-Path $tempRoot "static"
+  $resolvedOutputRoot = if ($OutputRoot) { Resolve-AbsolutePath -Path $OutputRoot -BasePath $projectRoot } else { $projectRoot }
+  $resolvedTempRoot = if ($TempRoot) {
+    Resolve-AbsolutePath -Path $TempRoot -BasePath $projectRoot
+  } else {
+    Join-Path $env:TEMP "FHPlayer-PyInstaller-$buildToken"
+  }
+  $distDir = Join-Path $resolvedOutputRoot "dist"
+  $buildDir = Join-Path $resolvedOutputRoot "build"
+  $tempDistDir = Join-Path $resolvedTempRoot "dist"
+  $tempBuildDir = Join-Path $resolvedTempRoot "build"
+  $tempStaticDir = Join-Path $resolvedTempRoot "static"
   $launcher = Resolve-PythonLauncher
 
   Write-Host "Building FHPlayer Windows executable..."
 
+  New-Item -ItemType Directory -Path $resolvedTempRoot -Force | Out-Null
   New-Item -ItemType Directory -Path $tempDistDir -Force | Out-Null
   New-Item -ItemType Directory -Path $tempBuildDir -Force | Out-Null
   New-Item -ItemType Directory -Path $tempStaticDir -Force | Out-Null
@@ -84,19 +118,25 @@ try {
     throw "Build finished without creating $tempExePath"
   }
 
-  $outputRoot = $projectRoot
-  try {
-    if (Test-Path $distDir) {
-      Remove-Item -LiteralPath $distDir -Recurse -Force
+  $outputRoot = $resolvedOutputRoot
+  $useTempOutputDirectly = (Normalize-DirectoryPath -Path $resolvedOutputRoot) -eq (Normalize-DirectoryPath -Path $resolvedTempRoot)
+  if (-not $useTempOutputDirectly) {
+    try {
+      New-Item -ItemType Directory -Path $resolvedOutputRoot -Force | Out-Null
+      if (Test-Path $distDir) {
+        Remove-Item -LiteralPath $distDir -Recurse -Force
+      }
+      if (Test-Path $buildDir) {
+        Remove-Item -LiteralPath $buildDir -Recurse -Force
+      }
+      Copy-Item -LiteralPath $tempDistDir -Destination $distDir -Recurse -Force
+      Copy-Item -LiteralPath $tempBuildDir -Destination $buildDir -Recurse -Force
+    } catch {
+      Write-Warning "Could not copy build output into $resolvedOutputRoot. Using temp build output at $resolvedTempRoot"
+      $outputRoot = $resolvedTempRoot
     }
-    if (Test-Path $buildDir) {
-      Remove-Item -LiteralPath $buildDir -Recurse -Force
-    }
-    Copy-Item -LiteralPath $tempDistDir -Destination $distDir -Recurse -Force
-    Copy-Item -LiteralPath $tempBuildDir -Destination $buildDir -Recurse -Force
-  } catch {
-    Write-Warning "Could not copy build output into the project folder. Using temp build output at $tempRoot"
-    $outputRoot = $tempRoot
+  } else {
+    $outputRoot = $resolvedTempRoot
   }
 
   $exePath = Join-Path $outputRoot "dist\FHPlayer\FHPlayer.exe"

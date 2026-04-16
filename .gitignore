@@ -1,9 +1,12 @@
 __pycache__/
+.tmp/
 *.py[cod]
 build/
 dist/
 dist-installer/
 dist-mobile/
+installers/android/*.apk
+installers/windows/FHPlayer-Setup.exe
 FHPlayerMobile/node_modules/
 FHPlayerMobile/android/.gradle/
 FHPlayerMobile/android/app/build/

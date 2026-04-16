@@ -1,5 +1,7 @@
 #define MyAppName "FHPlayer"
-#define MyAppVersion "0.1.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0"
+#endif
 #define MyAppPublisher "FHPlayer"
 #define MyAppExeName "FHPlayer.exe"
 #define MyAppId "{{F9F3836C-78A0-4691-A5FB-17CF066409AC}}"

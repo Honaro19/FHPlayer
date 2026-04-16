@@ -1,0 +1,7 @@
+{
+  "name": "fhplayer",
+  "private": true,
+  "scripts": {
+    "test:rules": "node tests/lovense-rules.test.js"
+  }
+}

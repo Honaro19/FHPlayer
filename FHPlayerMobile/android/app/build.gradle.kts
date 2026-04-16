@@ -3,6 +3,18 @@ plugins {
     kotlin("android")
 }
 
+val appVersionFile = layout.projectDirectory.file("../../../VERSION").asFile
+if (!appVersionFile.exists()) {
+    throw GradleException("Missing VERSION file at ${appVersionFile.absolutePath}")
+}
+
+val appVersion = appVersionFile.readText().trim()
+val appVersionMatch = Regex("""^(\d+)\.(\d+)\.(\d+)$""").matchEntire(appVersion)
+    ?: throw GradleException("VERSION must use major.minor.patch. Found: $appVersion")
+val appVersionCode = appVersionMatch.destructured.let { (major, minor, patch) ->
+    major.toInt() * 10000 + minor.toInt() * 100 + patch.toInt()
+}
+
 providers.gradleProperty("fhplayerBuildDir").orNull?.takeIf { it.isNotBlank() }?.let { buildDirOverride ->
     layout.buildDirectory.set(file(buildDirOverride))
 }
@@ -15,8 +27,8 @@ android {
         applicationId = "com.fhplayer.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appVersionCode
+        versionName = appVersion
     }
 
     buildTypes {
