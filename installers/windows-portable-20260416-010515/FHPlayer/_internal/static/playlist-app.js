@@ -2206,10 +2206,7 @@ function renderLovenseToySelect(selectedToyIds, toys, fallbackToys = null) {
     }
   });
 
-  const requestedSelection = (Array.isArray(selectedToyIds) ? selectedToyIds : [selectedToyIds]).filter(Boolean);
-  const matchedSelection = requestedSelection.filter((toyId) => options.some((toy) => toy.id === toyId));
-  const effectiveSelection = matchedSelection.length ? matchedSelection : options[0] ? [options[0].id] : [];
-  const selectedSet = new Set(effectiveSelection);
+  const selectedSet = new Set((Array.isArray(selectedToyIds) ? selectedToyIds : [selectedToyIds]).filter(Boolean));
   ui.lovenseToySelect.innerHTML = options.length
     ? options
         .map((toy) => {
@@ -2229,10 +2226,6 @@ function renderLovenseToySelect(selectedToyIds, toys, fallbackToys = null) {
   Array.from(ui.lovenseToySelect.options).forEach((option) => {
     option.selected = selectedSet.has(option.value);
   });
-
-  if (effectiveSelection.join(",") !== requestedSelection.join(",")) {
-    assignSelectedToysToForm(options.filter((toy) => selectedSet.has(toy.id)));
-  }
 }
 
 function findToyById(toyId) {

@@ -2086,21 +2086,14 @@ function renderLovenseActionRanges(lovenseConfig = null, options = {}) {
   try {
     const effectiveConfig = lovenseConfig ? getEffectiveLovenseDeviceConfig(lovenseConfig, normalizedMode) : null;
     const selectedToys = effectiveConfig?.selectedToys || [];
-    const visibleToys = selectedToys.length ? selectedToys : getCurrentAvailableToys().map((toy) => normalizeToySelection(toy)).filter((toy) => toy.id);
-    const actionKeys = visibleToys.length ? getAvailableLovenseActionKeysForToys(visibleToys) : [];
-    if (!actionKeys.length) {
-      ui.lovenseActionRanges.innerHTML = visibleToys.length
-        ? "<strong>Action ranges:</strong> No supported Lovense actions were detected for the current devices."
-        : "<strong>Action ranges:</strong> Detect or select a device to see the relevant actions.";
-      return;
-    }
-
+    const actionKeys = selectedToys.length ? getAvailableLovenseActionKeysForToys(selectedToys) : Object.keys(LOVENSE_ACTIONS);
     const rangeText = actionKeys.map((actionKey) => formatLovenseActionRange(actionKey)).filter(Boolean).join(", ");
     ui.lovenseActionRanges.innerHTML = selectedToys.length
       ? `<strong>Action ranges for current selection:</strong> <strong>${escapeHtml(rangeText)}</strong>.`
-      : `<strong>Action ranges for detected devices:</strong> <strong>${escapeHtml(rangeText)}</strong>.`;
+      : `<strong>Action ranges:</strong> <strong>${escapeHtml(rangeText)}</strong>.`;
   } catch (_error) {
-    ui.lovenseActionRanges.innerHTML = "<strong>Action ranges:</strong> Detect or select a device to see the relevant actions.";
+    const rangeText = Object.keys(LOVENSE_ACTIONS).map((actionKey) => formatLovenseActionRange(actionKey)).join(", ");
+    ui.lovenseActionRanges.innerHTML = `<strong>Action ranges:</strong> <strong>${escapeHtml(rangeText)}</strong>.`;
   }
 }
 
@@ -2206,10 +2199,7 @@ function renderLovenseToySelect(selectedToyIds, toys, fallbackToys = null) {
     }
   });
 
-  const requestedSelection = (Array.isArray(selectedToyIds) ? selectedToyIds : [selectedToyIds]).filter(Boolean);
-  const matchedSelection = requestedSelection.filter((toyId) => options.some((toy) => toy.id === toyId));
-  const effectiveSelection = matchedSelection.length ? matchedSelection : options[0] ? [options[0].id] : [];
-  const selectedSet = new Set(effectiveSelection);
+  const selectedSet = new Set((Array.isArray(selectedToyIds) ? selectedToyIds : [selectedToyIds]).filter(Boolean));
   ui.lovenseToySelect.innerHTML = options.length
     ? options
         .map((toy) => {
@@ -2229,10 +2219,6 @@ function renderLovenseToySelect(selectedToyIds, toys, fallbackToys = null) {
   Array.from(ui.lovenseToySelect.options).forEach((option) => {
     option.selected = selectedSet.has(option.value);
   });
-
-  if (effectiveSelection.join(",") !== requestedSelection.join(",")) {
-    assignSelectedToysToForm(options.filter((toy) => selectedSet.has(toy.id)));
-  }
 }
 
 function findToyById(toyId) {

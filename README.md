@@ -145,7 +145,9 @@ Current Android limitations:
 3. Optional: click `Import selected files` to copy the currently selected videos and funscripts into the managed FHPlayer library folders shown in the UI.
 4. Choose the execution mode for new playlist entries.
 5. For `Lovense live`, choose or create a user profile, configure protocol, host/IP, port, platform name, detect devices, select one or more devices for that profile, and enter the rule script.
+   On desktop the default profile uses `HTTPS` with `127.0.0.1:30010`.
 6. For phone-based Lovense setups, switch to `HTTP` when needed and enter the phone IP and port shown by the Lovense app.
+   With `Lovense Remote` on PC, the pairing/permission popup may appear only the first time you connect FHPlayer to that Lovense host. After you confirm it once, later detections may connect without showing the popup again.
 7. For `Lovense test`, pick one or more simulated devices from the normal device dropdown and reuse the same rule editor. On desktop, multi-select uses `Ctrl` + click on Windows/Linux or `Cmd` + click on macOS.
 8. Click `Add to playlist`.
 9. If needed, adjust the selected entry and click `Save selected entry`.
@@ -327,7 +329,7 @@ FHPlayer can also write the current entry settings back into the funscript under
             "id": "user-1",
             "label": "User 1",
             "scheme": "https",
-            "host": "127-0-0-1.lovense.club",
+            "host": "127.0.0.1",
             "port": "30010",
             "platformName": "FHPlayer",
             "selectedToys": [

@@ -50,6 +50,7 @@ android {
 
 val syncWebAssets by tasks.registering(Copy::class) {
     from(layout.projectDirectory.dir("../../../static"))
+    include("index.html", "styles.css", "playlist-app.js")
     into(layout.buildDirectory.dir("generated/fhplayer-assets/www"))
 }
 

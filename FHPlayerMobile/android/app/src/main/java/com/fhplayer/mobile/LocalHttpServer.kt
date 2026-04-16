@@ -244,7 +244,8 @@ class LocalHttpServer(
         val normalizedPath = when (path) {
             "", "/" -> "www/index.html"
             else -> {
-                val relativePath = path.removePrefix("/")
+                val requestedPath = path.removePrefix("/")
+                val relativePath = if (requestedPath == "app.js") "playlist-app.js" else requestedPath
                 if (relativePath.contains("..")) {
                     respondJson(
                         output,

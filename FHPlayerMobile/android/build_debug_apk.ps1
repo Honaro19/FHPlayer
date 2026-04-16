@@ -10,7 +10,20 @@ if (-not $gradle) {
 $buildDir = Join-Path $env:LOCALAPPDATA "FHPlayer\AndroidBuild\app"
 New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
-& $gradle -p $PSScriptRoot "-PfhplayerBuildDir=$buildDir" assembleDebug
+$generatedAssetDirs = @(
+  (Join-Path $PSScriptRoot "app\build\generated\fhplayer-assets"),
+  (Join-Path $PSScriptRoot "app\build\intermediates\assets\debug\www"),
+  (Join-Path $buildDir "generated\fhplayer-assets"),
+  (Join-Path $buildDir "intermediates\assets\debug\www")
+)
+
+foreach ($assetDir in $generatedAssetDirs) {
+  if (Test-Path $assetDir) {
+    Remove-Item -LiteralPath $assetDir -Recurse -Force
+  }
+}
+
+& $gradle -p $PSScriptRoot "-PfhplayerBuildDir=$buildDir" clean assembleDebug
 
 if ($LASTEXITCODE -ne 0) {
   exit $LASTEXITCODE
