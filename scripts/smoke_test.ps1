@@ -5,6 +5,7 @@ param(
   [switch]$SkipAndroid,
   [switch]$SkipAndroidInstall,
   [string]$AndroidDeviceSerial = "",
+  [string]$SmokeRoot = "",
   [switch]$KeepArtifacts
 )
 
@@ -304,7 +305,15 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $appVersion = Get-AppVersion -ProjectRoot $projectRoot
 $healthUrl = "http://127.0.0.1:8765/api/health"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$smokeRoot = Join-Path $projectRoot ".tmp\smoke-tests\$timestamp"
+$smokeRoot = if ($SmokeRoot) {
+  if ([System.IO.Path]::IsPathRooted($SmokeRoot)) {
+    [System.IO.Path]::GetFullPath($SmokeRoot)
+  } else {
+    [System.IO.Path]::GetFullPath((Join-Path $projectRoot $SmokeRoot))
+  }
+} else {
+  Join-Path $projectRoot ".tmp\smoke-tests\$timestamp"
+}
 $desktopLocalAppData = Join-Path $smokeRoot "desktop-localappdata"
 $windowsExeOutputRoot = Join-Path $smokeRoot "windows-exe-output"
 $windowsExeTempRoot = Join-Path $smokeRoot "windows-exe-temp"

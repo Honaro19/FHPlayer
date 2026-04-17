@@ -3,6 +3,8 @@ plugins {
     kotlin("android")
 }
 
+import java.util.Properties
+
 val appVersionFile = layout.projectDirectory.file("../../../VERSION").asFile
 if (!appVersionFile.exists()) {
     throw GradleException("Missing VERSION file at ${appVersionFile.absolutePath}")
@@ -19,9 +21,58 @@ providers.gradleProperty("fhplayerBuildDir").orNull?.takeIf { it.isNotBlank() }?
     layout.buildDirectory.set(file(buildDirOverride))
 }
 
+val releaseSigningPropertiesFile =
+    providers.gradleProperty("fhplayerReleaseSigningProperties")
+        .orNull
+        ?.takeIf { it.isNotBlank() }
+        ?.let { file(it) }
+        ?: layout.projectDirectory.file("release-signing.properties").asFile
+val releaseSigningProperties =
+    Properties().apply {
+        if (releaseSigningPropertiesFile.exists()) {
+            releaseSigningPropertiesFile.inputStream().use(::load)
+        }
+    }
+val releaseSigningMode = providers.gradleProperty("fhplayerReleaseSigningMode").orNull?.trim()?.lowercase() ?: "auto"
+
+fun resolveReleaseSigningValue(gradleKey: String, envKey: String): String? =
+    providers.gradleProperty(gradleKey).orNull?.trim()?.takeIf { it.isNotBlank() }
+        ?: providers.environmentVariable(envKey).orNull?.trim()?.takeIf { it.isNotBlank() }
+        ?: releaseSigningProperties.getProperty(gradleKey)?.trim()?.takeIf { it.isNotBlank() }
+
+val releaseStoreFilePath = resolveReleaseSigningValue("fhplayerReleaseStoreFile", "FHPLAYER_ANDROID_KEYSTORE_PATH")
+val releaseStorePassword = resolveReleaseSigningValue("fhplayerReleaseStorePassword", "FHPLAYER_ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = resolveReleaseSigningValue("fhplayerReleaseKeyAlias", "FHPLAYER_ANDROID_KEY_ALIAS")
+val releaseKeyPassword = resolveReleaseSigningValue("fhplayerReleaseKeyPassword", "FHPLAYER_ANDROID_KEY_PASSWORD")
+val hasReleaseSigning =
+    releaseSigningMode != "skip" &&
+        !releaseStoreFilePath.isNullOrBlank() &&
+        !releaseStorePassword.isNullOrBlank() &&
+        !releaseKeyAlias.isNullOrBlank() &&
+        !releaseKeyPassword.isNullOrBlank()
+
+if (releaseSigningMode == "require" && !hasReleaseSigning) {
+    throw GradleException(
+        "Android release signing is required. Provide fhplayerReleaseStoreFile, " +
+            "fhplayerReleaseStorePassword, fhplayerReleaseKeyAlias, and fhplayerReleaseKeyPassword " +
+            "via Gradle properties, environment variables, or release-signing.properties.",
+    )
+}
+
 android {
     namespace = "com.fhplayer.mobile"
     compileSdk = 36
+
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("fhplayerRelease") {
+                storeFile = file(releaseStoreFilePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
 
     defaultConfig {
         applicationId = "com.fhplayer.mobile"
@@ -37,6 +88,9 @@ android {
         }
         getByName("release") {
             isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("fhplayerRelease")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
@@ -47,6 +101,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     kotlinOptions {
@@ -71,5 +129,6 @@ tasks.named("preBuild").configure {
 }
 
 dependencies {
+    implementation("androidx.activity:activity-ktx:1.10.1")
     implementation(kotlin("stdlib"))
 }

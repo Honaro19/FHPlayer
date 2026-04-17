@@ -1,12 +1,14 @@
 package com.fhplayer.mobile
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.util.Log
+import android.provider.OpenableColumns
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -17,11 +19,16 @@ import android.webkit.WebViewClient
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.WindowCompat
 import android.widget.FrameLayout
 import android.widget.Toast
 import java.io.IOException
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
     private lateinit var rootContainer: FrameLayout
     private lateinit var webView: WebView
     private lateinit var localHttpServer: LocalHttpServer
@@ -29,15 +36,35 @@ class MainActivity : Activity() {
     private var pendingFileChooserKind: String = "files"
     private var fullscreenView: View? = null
     private var fullscreenCallback: CustomViewCallback? = null
+    private val fileChooserLauncher: ActivityResultLauncher<Intent> =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            handleFileChooserResult(result.resultCode, result.data)
+        }
+    private val backNavigationCallback =
+        object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (handleBackNavigation()) {
+                    return
+                }
+
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+                isEnabled = true
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLogger.configure(applicationContext)
+        AppLogger.info(applicationContext, "FHPlayer Android activity created.")
+        registerBackHandler()
 
         localHttpServer = LocalHttpServer(applicationContext)
         localHttpServer.ensureLibraryDirectories()
         try {
             localHttpServer.start()
         } catch (exception: IOException) {
+            AppLogger.error(applicationContext, "Could not start the embedded FHPlayer server.", exception)
             Toast.makeText(this, "Could not start the embedded FHPlayer server.", Toast.LENGTH_LONG).show()
             finish()
             return
@@ -60,8 +87,8 @@ class MainActivity : Activity() {
 
         webView.webViewClient = object : WebViewClient() {
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                Log.e(
-                    TAG,
+                AppLogger.error(
+                    applicationContext,
                     "WebView renderer exited. didCrash=${detail.didCrash()} priority=${detail.rendererPriorityAtExit()}",
                 )
                 Toast.makeText(
@@ -93,10 +120,11 @@ class MainActivity : Activity() {
 
                 return try {
                     val chooserIntent = buildFilePickerIntent(fileChooserParams)
-                    startActivityForResult(chooserIntent, REQUEST_FILE_CHOOSER)
+                    fileChooserLauncher.launch(chooserIntent)
                     true
-                } catch (_: ActivityNotFoundException) {
+                } catch (exception: ActivityNotFoundException) {
                     this@MainActivity.fileChooserCallback = null
+                    AppLogger.warn(applicationContext, "No file picker is available on this device.", exception)
                     Toast.makeText(
                         this@MainActivity,
                         "No file picker is available on this device.",
@@ -114,27 +142,41 @@ class MainActivity : Activity() {
             try {
                 localHttpServer.start()
             } catch (exception: IOException) {
+                AppLogger.error(applicationContext, "Could not restart the embedded FHPlayer server.", exception)
                 Toast.makeText(this, "Could not restart the embedded FHPlayer server.", Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_FILE_CHOOSER) {
-            return
-        }
-
+    private fun handleFileChooserResult(resultCode: Int, data: Intent?) {
         persistReadPermissions(data)
         val selectedUris = extractSelectedUris(resultCode, data)
+        val acceptedUris = filterSelectedUrisByKind(pendingFileChooserKind, selectedUris.orEmpty())
+        if (selectedUris != null && acceptedUris.size != selectedUris.size) {
+            val rejectedCount = selectedUris.size - acceptedUris.size
+            AppLogger.warn(
+                applicationContext,
+                "Ignored $rejectedCount unsupported file(s) for $pendingFileChooserKind.",
+            )
+            Toast.makeText(
+                this,
+                "Ignored $rejectedCount unsupported file${if (rejectedCount == 1) "" else "s"} for $pendingFileChooserKind.",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
         if (::localHttpServer.isInitialized) {
-            localHttpServer.recordDocumentSelection(pendingFileChooserKind, selectedUris.orEmpty())
+            localHttpServer.recordDocumentSelection(pendingFileChooserKind, acceptedUris.toTypedArray())
         }
         val resultCallback = fileChooserCallback
         fileChooserCallback = null
         pendingFileChooserKind = "files"
-        resultCallback?.onReceiveValue(selectedUris)
+        resultCallback?.onReceiveValue(
+            when {
+                resultCode != RESULT_OK -> null
+                acceptedUris.isEmpty() -> emptyArray()
+                else -> acceptedUris.toTypedArray()
+            },
+        )
     }
 
     private fun persistReadPermissions(data: Intent?) {
@@ -180,9 +222,15 @@ class MainActivity : Activity() {
 
             if (wantsVideo && !wantsJsonLike) {
                 type = "video/*"
+            } else if (wantsJsonLike && !wantsVideo) {
+                // Android providers often treat ".funscript" as a generic binary file,
+                // so we advertise JSON plus a generic fallback and validate the result after selection.
+                type = "*/*"
+                putExtra(
+                    Intent.EXTRA_MIME_TYPES,
+                    arrayOf("application/json", "text/json", "application/octet-stream"),
+                )
             } else {
-                // Android providers usually do not understand ".funscript" as a filterable MIME type.
-                // Using */* keeps those files selectable in Files / Downloads.
                 type = "*/*"
             }
         }
@@ -223,6 +271,39 @@ class MainActivity : Activity() {
         return data?.data?.let { arrayOf(it) }
     }
 
+    private fun filterSelectedUrisByKind(kind: String, uris: Array<out Uri>): List<Uri> {
+        val normalizedKind = kind.trim().lowercase()
+        if (normalizedKind != "funscripts") {
+            return uris.toList()
+        }
+
+        return uris.filter { uri -> isAcceptedFunscriptUri(uri) }
+    }
+
+    private fun isAcceptedFunscriptUri(uri: Uri): Boolean {
+        val displayName = resolveUriDisplayName(uri).lowercase()
+        if (displayName.endsWith(".funscript") || displayName.endsWith(".json")) {
+            return true
+        }
+
+        val mimeType = contentResolver.getType(uri)?.trim()?.lowercase().orEmpty()
+        return mimeType == "application/json" || mimeType == "text/json"
+    }
+
+    private fun resolveUriDisplayName(uri: Uri): String =
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val columnIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (columnIndex >= 0) {
+                    cursor.getString(columnIndex).orEmpty()
+                } else {
+                    ""
+                }
+            } else {
+                ""
+            }
+        }.orEmpty()
+
     private fun createAndAttachWebView() {
         rootContainer = FrameLayout(this)
         webView = WebView(this)
@@ -262,16 +343,7 @@ class MainActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
             ),
         )
-        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-        window.decorView.systemUiVisibility =
-            (
-                View.SYSTEM_UI_FLAG_FULLSCREEN or
-                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
-                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                )
+        applyFullscreenMode(isFullscreen = true)
     }
 
     private fun hideFullscreenView() {
@@ -279,26 +351,74 @@ class MainActivity : Activity() {
         rootContainer.removeView(customView)
         fullscreenView = null
         webView.visibility = View.VISIBLE
-        window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        applyFullscreenMode(isFullscreen = false)
         fullscreenCallback?.onCustomViewHidden()
         fullscreenCallback = null
     }
 
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
+    private fun registerBackHandler() {
+        onBackPressedDispatcher.addCallback(this, backNavigationCallback)
+    }
+
+    private fun handleBackNavigation(): Boolean {
         if (fullscreenView != null) {
             hideFullscreenView()
-            return
+            return true
         }
         if (::webView.isInitialized && webView.canGoBack()) {
             webView.goBack()
+            return true
+        }
+        return false
+    }
+
+    private fun applyFullscreenMode(isFullscreen: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val insetsController = window.insetsController
+            if (isFullscreen) {
+                WindowCompat.setDecorFitsSystemWindows(window, false)
+                insetsController?.hide(WindowInsets.Type.systemBars())
+                insetsController?.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            } else {
+                insetsController?.show(WindowInsets.Type.systemBars())
+                WindowCompat.setDecorFitsSystemWindows(window, true)
+            }
             return
         }
-        super.onBackPressed()
+
+        applyLegacyFullscreenMode(isFullscreen)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applyLegacyFullscreenMode(isFullscreen: Boolean) {
+        if (isFullscreen) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            window.decorView.systemUiVisibility =
+                (
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                        View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                        View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    )
+            return
+        }
+
+        window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && fullscreenView != null) {
+            applyFullscreenMode(isFullscreen = true)
+        }
     }
 
     override fun onDestroy() {
+        AppLogger.info(applicationContext, "FHPlayer Android activity is shutting down.")
         fileChooserCallback?.onReceiveValue(null)
         fileChooserCallback = null
         hideFullscreenView()
@@ -311,10 +431,5 @@ class MainActivity : Activity() {
             localHttpServer.stop()
         }
         super.onDestroy()
-    }
-
-    companion object {
-        private const val TAG = "FHPlayerMobile"
-        private const val REQUEST_FILE_CHOOSER = 4101
     }
 }

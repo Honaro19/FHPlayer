@@ -220,6 +220,25 @@ test("validateLovenseRulesForConfig rejects unsupported targeted actions", () =>
   );
 });
 
+test("validateSelectedFunscriptFiles accepts .funscript and .json files", () => {
+  assert.doesNotThrow(() =>
+    engine.validateSelectedFunscriptFiles([
+      { name: "sample.funscript", type: "" },
+      { name: "metadata.json", type: "application/json" },
+    ]),
+  );
+});
+
+test("validateSelectedFunscriptFiles rejects video files in the funscript picker", () => {
+  assert.throws(
+    () =>
+      engine.validateSelectedFunscriptFiles([
+        { name: "clip.mp4", type: "video/mp4" },
+      ]),
+    /Only \.funscript and \.json files are allowed/,
+  );
+});
+
 test("validateLovenseRulesForConfig rejects duplicate actions on the same toy", () => {
   const config = createTestLovenseConfig(engine);
 
@@ -254,6 +273,157 @@ test("groupLovenseCommandsByDelay groups commands in ascending delay order", () 
       { delayMs: 250, actions: ["Rotate:3", "Pump:2"] },
     ],
   );
+});
+
+test("pairVideosWithScripts prefers filename matches before fallback pairing", () => {
+  const pairing = engine.pairVideosWithScripts(
+    [
+      { name: "scene-01.mp4" },
+      { name: "bonus.mp4" },
+      { name: "scene-02.mp4" },
+    ],
+    [
+      { stem: engine.normalizeStem("scene_02.funscript"), file: { name: "scene_02.funscript" } },
+      { stem: engine.normalizeStem("scene-01.funscript"), file: { name: "scene-01.funscript" } },
+      { stem: engine.normalizeStem("mismatch.funscript"), file: { name: "mismatch.funscript" } },
+    ],
+  );
+
+  assert.deepEqual(
+    toPlainJson(pairing.pairs.map(({ videoFile, scriptData }) => [videoFile.name, scriptData.file.name])),
+    [
+      ["scene-01.mp4", "scene-01.funscript"],
+      ["scene-02.mp4", "scene_02.funscript"],
+      ["bonus.mp4", "mismatch.funscript"],
+    ],
+  );
+  assert.equal(pairing.fallbackPairs, 1);
+  assert.equal(pairing.unmatchedVideos.length, 0);
+  assert.equal(pairing.unmatchedScripts.length, 0);
+});
+
+test("extractScriptSettings prefers metadata.fhplayer over legacy root values", () => {
+  const settings = toPlainJson(
+    engine.extractScriptSettings({
+      executionMode: "lovense-test",
+      rulesText: "if pos >= 1 then stop()",
+      lovense: {
+        testToyId: "legacy-root",
+      },
+      metadata: {
+        fh_player: {
+          executionMode: "lovense-live",
+          rulesText: "if pos >= 2 then vibrate(4)",
+          lovense: {
+            testToyId: "legacy-metadata",
+          },
+        },
+        fhplayer: {
+          executionMode: "lovense-test",
+          rulesText: "if pos >= 3 then rotate(2)",
+          lovense: {
+            testSelectedToys: [
+              {
+                id: "sim-max2",
+                name: "Max 2 Simulator",
+                nickName: "Max 2 Simulator",
+                type: "Max 2",
+                fullFunctionNames: ["Vibrate", "Pump"],
+              },
+            ],
+          },
+        },
+      },
+    }),
+  );
+
+  assert.equal(settings.executionMode, "lovense-test");
+  assert.equal(settings.rulesText, "if pos >= 3 then rotate(2)");
+  assert.equal(settings.lovense.testToyId, "sim-max2");
+  assert.equal(settings.lovense.testSelectedToys.length, 1);
+});
+
+test("buildSavedFunscriptDocument writes schemaVersion 2 metadata without dropping existing data", () => {
+  const document = toPlainJson(
+    engine.buildSavedFunscriptDocument({
+      scriptDocument: {
+        actions: [{ at: 100, pos: 50 }],
+        metadata: {
+          title: "Original title",
+        },
+      },
+      executionMode: "lovense-live",
+      rulesText: "if pos >= 15 then vibrate(10)\nelse stop()",
+      lovense: engine.normalizeLovenseConfig({
+        selectedConnectionId: "user-2",
+        connections: [
+          {
+            id: "user-2",
+            label: "User 2",
+            scheme: "http",
+            host: "192.168.0.2",
+            port: "20010",
+            platformName: "FHPlayer",
+            selectedToys: [
+              {
+                id: "toy-a",
+                name: "Edge 2",
+                nickName: "Edge 2",
+                type: "Edge 2",
+                fullFunctionNames: ["Vibrate2"],
+              },
+            ],
+          },
+        ],
+      }),
+    }),
+  );
+
+  assert.equal(document.metadata.title, "Original title");
+  assert.equal(document.metadata.fhplayer.schemaVersion, 2);
+  assert.equal(document.metadata.fhplayer.executionMode, "lovense-live");
+  assert.equal(document.metadata.fhplayer.connections, undefined);
+  assert.equal(document.metadata.fhplayer.lovense.selectedConnectionId, "user-2");
+  assert.equal(document.metadata.fhplayer.lovense.connections[0].host, "192.168.0.2");
+  assert.equal(document.actions.length, 1);
+});
+
+test("validateLovenseRulesForConfig rejects delay-only branches", () => {
+  const config = createTestLovenseConfig(engine);
+
+  assert.throws(
+    () =>
+      engine.validateLovenseRulesForConfig("if pos >= 1 then delay(250)", config, {
+        requireToyId: false,
+        mode: "test",
+      }),
+    /delay\(\) cannot be the only command in a branch/,
+  );
+});
+
+test("normalizeLovenseConfig keeps legacy live and test toy fields usable", () => {
+  const normalized = toPlainJson(
+    engine.normalizeLovenseConfig({
+      scheme: "http",
+      host: "10.0.0.5",
+      port: "20010",
+      platformName: "FHPlayer",
+      toyId: "legacy-live",
+      toyName: "Legacy Nora",
+      toyType: "Nora",
+      capabilities: ["Vibrate", "Rotate"],
+      testToyId: "legacy-test",
+      testToyName: "Legacy Test",
+      testToyType: "Max 2",
+      testCapabilities: ["Vibrate", "Pump"],
+    }),
+  );
+
+  assert.equal(normalized.connections.length, 1);
+  assert.equal(normalized.connections[0].host, "10.0.0.5");
+  assert.equal(normalized.connections[0].selectedToys[0].id, "legacy-live");
+  assert.equal(normalized.testSelectedToys[0].id, "legacy-test");
+  assert.deepEqual(normalized.testCapabilities, ["Vibrate", "Pump"]);
 });
 
 let failures = 0;

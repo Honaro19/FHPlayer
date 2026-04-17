@@ -6,11 +6,16 @@ dist/
 dist-installer/
 dist-mobile/
 installers/android/*.apk
+installers/android/*.aab
 installers/windows/FHPlayer-Setup.exe
+installers/windows/FHPlayer-*-Setup.exe
 FHPlayerMobile/node_modules/
 FHPlayerMobile/android/.gradle/
 FHPlayerMobile/android/app/build/
 FHPlayerMobile/android/local.properties
+FHPlayerMobile/android/release-signing.properties
+FHPlayerMobile/android/*.jks
+FHPlayerMobile/android/*.keystore
 installers/windows-portable/
 installers/windows-portable-*/
 .git-acl-backup.txt

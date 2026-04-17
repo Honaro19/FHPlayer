@@ -279,6 +279,42 @@ else stop()</textarea>
             </div>
           </div>
 
+          <div class="config-block">
+            <div class="section-head compact-head">
+              <h3>Updates</h3>
+              <span id="update-version-label">Version unknown</span>
+            </div>
+            <div class="update-controls">
+              <label class="field toggle-row">
+                <span>Check automatically on startup</span>
+                <input id="update-auto-check" type="checkbox" />
+              </label>
+              <div class="button-row compact-row update-button-row">
+                <button id="check-updates-button" class="secondary">Check now</button>
+                <a id="update-release-link" class="button-link hidden" href="#" target="_blank" rel="noreferrer">Open release</a>
+              </div>
+            </div>
+            <div id="update-status" class="status-note muted">
+              Update checks are optional and currently disabled.
+            </div>
+          </div>
+
+          <div class="config-block">
+            <div class="section-head compact-head">
+              <h3>Diagnostics</h3>
+              <span id="diagnostics-status">Loading diagnostics...</span>
+            </div>
+            <textarea id="diagnostics-paths" rows="5" readonly>Loading diagnostic paths...</textarea>
+            <div class="button-row compact-row update-button-row">
+              <button id="refresh-diagnostics-button" class="secondary">Refresh diagnostics</button>
+              <button id="open-diagnostics-button" class="secondary">Open log folder</button>
+            </div>
+            <label class="field">
+              <span>Recent log output</span>
+              <textarea id="diagnostics-log" class="diagnostics-log" rows="9" readonly>Loading recent log output...</textarea>
+            </label>
+          </div>
+
           <div class="button-row">
             <button id="add-playlist-button" class="primary">Add to playlist</button>
             <button id="update-entry-button" class="secondary">Save selected entry</button>

@@ -4,7 +4,6 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.util.Log
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
@@ -25,6 +24,7 @@ import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.time.Instant
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ExecutorService
@@ -68,6 +68,7 @@ class LocalHttpServer(
             isDaemon = true
             start()
         }
+        AppLogger.info(context, "Embedded HTTP server started at ${baseUrl()}.")
     }
 
     @Synchronized
@@ -80,6 +81,7 @@ class LocalHttpServer(
         serverSocket = null
         acceptThread = null
         clientExecutor.shutdownNow()
+        AppLogger.info(context, "Embedded HTTP server stopped.")
     }
 
     fun isRunning(): Boolean = running
@@ -89,6 +91,65 @@ class LocalHttpServer(
         resolveLibraryDirectory("funscripts")
         resolveLibraryDirectory("exports")
     }
+
+    @Synchronized
+    private fun loadSettings(): JSONObject {
+        val settingsFile = settingsFile()
+        if (!settingsFile.exists()) {
+            return normalizeSettings(null)
+        }
+
+        return try {
+            normalizeSettings(JSONObject(settingsFile.readText(Charsets.UTF_8)))
+        } catch (_: Exception) {
+            normalizeSettings(null)
+        }
+    }
+
+    @Synchronized
+    private fun saveSettings(settings: JSONObject): JSONObject {
+        val normalizedSettings = normalizeSettings(settings)
+        val settingsFile = settingsFile()
+        settingsFile.parentFile?.mkdirs()
+        settingsFile.writeText("${normalizedSettings.toString(2)}\n", Charsets.UTF_8)
+        return normalizedSettings
+    }
+
+    private fun normalizeSettings(payload: JSONObject?): JSONObject {
+        val updates = payload?.optJSONObject("updates") ?: JSONObject()
+        val normalizedUpdates = JSONObject().put("autoCheckEnabled", updates.optBoolean("autoCheckEnabled", false))
+        normalizeUpdateResult(updates.opt("lastResult"))?.let { normalizedUpdates.put("lastResult", it) }
+        return JSONObject().put("updates", normalizedUpdates)
+    }
+
+    private fun normalizeUpdateResult(value: Any?): JSONObject? {
+        val updateResult = value as? JSONObject ?: return null
+        return JSONObject()
+            .put("status", updateResult.optString("status", "unknown"))
+            .put("checkedAt", updateResult.optString("checkedAt", ""))
+            .put("currentVersion", updateResult.optString("currentVersion", BuildConfig.VERSION_NAME))
+            .put("latestVersion", updateResult.optString("latestVersion", ""))
+            .put("updateAvailable", updateResult.optBoolean("updateAvailable", false))
+            .put("releaseUrl", updateResult.optString("releaseUrl", ""))
+            .put("downloadUrl", updateResult.optString("downloadUrl", ""))
+            .put("assetName", updateResult.optString("assetName", ""))
+            .put("publishedAt", updateResult.optString("publishedAt", ""))
+            .put("message", updateResult.optString("message", ""))
+    }
+
+    private fun buildSettingsPayload(): JSONObject =
+        JSONObject()
+            .put("ok", true)
+            .put("currentVersion", BuildConfig.VERSION_NAME)
+            .put("settings", loadSettings())
+            .put(
+                "updateSupport",
+                JSONObject()
+                    .put("configured", UPDATE_FEED_URL.isNotBlank())
+                    .put("sourceUrl", UPDATE_FEED_URL),
+            )
+
+    private fun settingsFile(): File = File(context.filesDir, "fhplayer-settings.json")
 
     @Synchronized
     fun recordDocumentSelection(kind: String, uris: Array<out Uri>) {
@@ -121,7 +182,7 @@ class LocalHttpServer(
             } catch (_: SocketTimeoutException) {
             } catch (exception: IOException) {
                 if (running) {
-                    Log.e(TAG, "Could not accept HTTP client.", exception)
+                    AppLogger.error(context, "Could not accept HTTP client.", exception)
                 }
             }
         }
@@ -137,6 +198,7 @@ class LocalHttpServer(
                 val request = parseRequest(input) ?: return
                 routeRequest(request, output)
             } catch (exception: Exception) {
+                AppLogger.error(context, "Unhandled HTTP request failure.", exception)
                 respondJson(
                     output,
                     HTTP_INTERNAL_SERVER_ERROR,
@@ -161,18 +223,29 @@ class LocalHttpServer(
                     JSONObject()
                         .put("ok", true)
                         .put("port", port)
+                        .put("version", BuildConfig.VERSION_NAME)
                         .put("platform", "android")
                         .put(
                             "capabilities",
                             JSONObject()
                                 .put("execute", false)
-                                .put("lovense", true),
+                                .put("lovense", true)
+                                .put("updates", true)
+                                .put("diagnostics", true),
                         ),
                 )
             }
 
             request.method == "GET" && path == "/api/library/info" -> {
                 respondJson(output, HTTP_OK, buildLibraryPayload())
+            }
+
+            request.method == "GET" && path == "/api/settings" -> {
+                respondJson(output, HTTP_OK, buildSettingsPayload())
+            }
+
+            request.method == "GET" && path == "/api/diagnostics/info" -> {
+                respondJson(output, HTTP_OK, buildDiagnosticsPayload())
             }
 
             request.method == "GET" && path == "/api/android/document-selection" -> {
@@ -193,6 +266,24 @@ class LocalHttpServer(
 
             request.method == "PUT" && path == "/api/android/document-write" -> {
                 handleDocumentWrite(requestUri, request, output)
+            }
+
+            request.method == "POST" && path == "/api/settings" -> {
+                handleSettingsUpdate(request, output)
+            }
+
+            request.method == "POST" && path == "/api/update/check" -> {
+                handleUpdateCheck(output)
+            }
+
+            request.method == "POST" && path == "/api/diagnostics/open" -> {
+                respondJson(
+                    output,
+                    HTTP_NOT_IMPLEMENTED,
+                    JSONObject()
+                        .put("ok", false)
+                        .put("error", "Opening the diagnostics folder directly is not available in the Android app build."),
+                )
             }
 
             request.method == "POST" && path == "/api/library/open" -> {
@@ -398,6 +489,63 @@ class LocalHttpServer(
         } catch (exception: IOException) {
             respondJson(output, HTTP_INTERNAL_SERVER_ERROR, JSONObject().put("ok", false).put("error", exception.message))
         }
+    }
+
+    private fun handleSettingsUpdate(request: HttpRequest, output: OutputStream) {
+        try {
+            val payload = parseJsonObject(request.body)
+            val currentSettings = loadSettings()
+            val updates = payload.optJSONObject("updates") ?: JSONObject()
+            currentSettings.optJSONObject("updates")
+                ?.put("autoCheckEnabled", updates.optBoolean("autoCheckEnabled", false))
+            val savedSettings = saveSettings(currentSettings)
+            respondJson(
+                output,
+                HTTP_OK,
+                JSONObject()
+                    .put("ok", true)
+                    .put("currentVersion", BuildConfig.VERSION_NAME)
+                    .put("settings", savedSettings)
+                    .put(
+                        "updateSupport",
+                        JSONObject()
+                            .put("configured", UPDATE_FEED_URL.isNotBlank())
+                            .put("sourceUrl", UPDATE_FEED_URL),
+                    ),
+            )
+        } catch (exception: JSONException) {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", exception.message))
+        } catch (exception: IOException) {
+            respondJson(output, HTTP_INTERNAL_SERVER_ERROR, JSONObject().put("ok", false).put("error", exception.message))
+        }
+    }
+
+    private fun handleUpdateCheck(output: OutputStream) {
+        val updateResult = fetchUpdateResult(platform = "android")
+        val currentSettings = loadSettings()
+        currentSettings.optJSONObject("updates")?.put("lastResult", updateResult)
+        val savedSettings =
+            try {
+                saveSettings(currentSettings)
+            } catch (exception: IOException) {
+                respondJson(output, HTTP_INTERNAL_SERVER_ERROR, JSONObject().put("ok", false).put("error", exception.message))
+                return
+            }
+
+        val statusCode = if (updateResult.optString("status") == "error") HTTP_BAD_GATEWAY else HTTP_OK
+        AppLogger.info(
+            context,
+            "Update check finished with status=${updateResult.optString("status")} latest=${updateResult.optString("latestVersion")}.",
+        )
+        respondJson(
+            output,
+            statusCode,
+            JSONObject()
+                .put("ok", statusCode == HTTP_OK)
+                .put("currentVersion", BuildConfig.VERSION_NAME)
+                .put("result", updateResult)
+                .put("settings", savedSettings),
+        )
     }
 
     @Throws(IOException::class, JSONException::class)
@@ -782,6 +930,162 @@ class LocalHttpServer(
         return ""
     }
 
+    private fun parseVersionParts(version: String): List<Int>? {
+        val match = VERSION_PATTERN.matchEntire(version.trim()) ?: return null
+        return match.destructured.toList().map { it.toInt() }
+    }
+
+    private fun isVersionNewer(candidateVersion: List<Int>, currentVersion: List<Int>): Boolean {
+        val maxLength = maxOf(candidateVersion.size, currentVersion.size)
+        for (index in 0 until maxLength) {
+            val candidatePart = candidateVersion.getOrElse(index) { 0 }
+            val currentPart = currentVersion.getOrElse(index) { 0 }
+            if (candidatePart != currentPart) {
+                return candidatePart > currentPart
+            }
+        }
+        return false
+    }
+
+    private fun utcNowIso(): String = Instant.now().toString()
+
+    private fun selectReleaseAsset(assets: JSONArray?, platform: String): Pair<String, String> {
+        if (assets == null) {
+            return "" to ""
+        }
+
+        val preferredSuffixes = if (platform == "android") listOf(".apk", ".aab") else listOf(".exe")
+        val normalizedAssets =
+            buildList {
+                for (index in 0 until assets.length()) {
+                    val asset = assets.optJSONObject(index) ?: continue
+                    add(
+                        asset.optString("browser_download_url", asset.optString("downloadUrl", "")) to
+                            asset.optString("name", ""),
+                    )
+                }
+            }
+
+        preferredSuffixes.forEach { suffix ->
+            normalizedAssets.firstOrNull { (_, name) -> name.lowercase(Locale.US).endsWith(suffix) }?.let { (url, name) ->
+                if (url.isNotBlank()) {
+                    return url to name
+                }
+            }
+        }
+
+        return "" to ""
+    }
+
+    private fun parseReleasePayload(payload: JSONObject, platform: String): JSONObject {
+        val latestVersionRaw =
+            firstNonBlank(
+                payload.optString("version", ""),
+                payload.optString("latestVersion", ""),
+                payload.optString("tag_name", ""),
+                payload.optString("name", ""),
+            )
+        val latestVersionParts =
+            parseVersionParts(latestVersionRaw)
+                ?: throw IllegalArgumentException("Update feed did not provide a valid semantic version")
+        val currentVersionParts = parseVersionParts(BuildConfig.VERSION_NAME) ?: listOf(0, 0, 0)
+        val normalizedLatestVersion = latestVersionParts.joinToString(".")
+        val updateAvailable = isVersionNewer(latestVersionParts, currentVersionParts)
+        val (downloadUrl, assetName) = selectReleaseAsset(payload.optJSONArray("assets"), platform)
+
+        return JSONObject()
+            .put("status", if (updateAvailable) "available" else "current")
+            .put("checkedAt", utcNowIso())
+            .put("currentVersion", BuildConfig.VERSION_NAME)
+            .put("latestVersion", normalizedLatestVersion)
+            .put("updateAvailable", updateAvailable)
+            .put("releaseUrl", firstNonBlank(payload.optString("releaseUrl", ""), payload.optString("html_url", ""), payload.optString("url", "")))
+            .put("downloadUrl", downloadUrl)
+            .put("assetName", assetName)
+            .put("publishedAt", firstNonBlank(payload.optString("publishedAt", ""), payload.optString("published_at", ""), payload.optString("created_at", "")))
+            .put(
+                "message",
+                if (updateAvailable) {
+                    "Version $normalizedLatestVersion is available."
+                } else {
+                    "You are already on the latest version (${BuildConfig.VERSION_NAME})."
+                },
+            )
+    }
+
+    private fun fetchUpdateResult(platform: String): JSONObject {
+        if (UPDATE_FEED_URL.isBlank()) {
+            return JSONObject()
+                .put("status", "unconfigured")
+                .put("checkedAt", utcNowIso())
+                .put("currentVersion", BuildConfig.VERSION_NAME)
+                .put("latestVersion", "")
+                .put("updateAvailable", false)
+                .put("releaseUrl", "")
+                .put("downloadUrl", "")
+                .put("assetName", "")
+                .put("publishedAt", "")
+                .put("message", "No update feed is configured.")
+        }
+
+        return try {
+            val connection = (URL(UPDATE_FEED_URL).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 5000
+                readTimeout = 5000
+                requestMethod = "GET"
+                doInput = true
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("User-Agent", "FHPlayer/${BuildConfig.VERSION_NAME}")
+            }
+            val responseCode = connection.responseCode
+            val responseBody = (if (responseCode >= 400) connection.errorStream else connection.inputStream)?.use { stream ->
+                stream.bufferedReader(StandardCharsets.UTF_8).readText()
+            }.orEmpty()
+
+            if (responseCode >= 400) {
+                throw IOException(responseBody.ifBlank { "Update check failed with HTTP $responseCode" })
+            }
+
+            parseReleasePayload(JSONObject(responseBody), platform)
+        } catch (exception: Exception) {
+            JSONObject()
+                .put("status", "error")
+                .put("checkedAt", utcNowIso())
+                .put("currentVersion", BuildConfig.VERSION_NAME)
+                .put("latestVersion", "")
+                .put("updateAvailable", false)
+                .put("releaseUrl", "")
+                .put("downloadUrl", "")
+                .put("assetName", "")
+                .put("publishedAt", "")
+                .put("message", exception.message ?: exception.javaClass.simpleName)
+        }
+    }
+
+    private fun buildDiagnosticsPayload(): JSONObject {
+        val logDirectory = AppLogger.logDirectory(context)
+        val logFile = AppLogger.logFile(context)
+        return JSONObject()
+            .put("ok", true)
+            .put("platform", "android")
+            .put("version", BuildConfig.VERSION_NAME)
+            .put(
+                "paths",
+                JSONObject()
+                    .put("appData", context.filesDir.absolutePath)
+                    .put("libraryRoot", libraryRootDirectory().absolutePath)
+                    .put("settingsFile", settingsFile().absolutePath)
+                    .put("logDirectory", logDirectory.absolutePath)
+                    .put("logFile", logFile.absolutePath),
+            )
+            .put(
+                "capabilities",
+                JSONObject()
+                    .put("openLogFolder", false),
+            )
+            .put("recentLog", AppLogger.recentLogText(context))
+    }
+
     private fun libraryRootDirectory(): File {
         val externalDirectory = context.getExternalFilesDir(null)
         val baseDirectory = externalDirectory ?: context.filesDir
@@ -856,7 +1160,6 @@ class LocalHttpServer(
     )
 
     companion object {
-        private const val TAG = "FHPlayerMobile"
         private const val HOST = "127.0.0.1"
         private const val PORT = 8765
         private const val HTTP_OK = 200
@@ -866,6 +1169,8 @@ class LocalHttpServer(
         private const val HTTP_BAD_GATEWAY = 502
         private const val HTTP_GATEWAY_TIMEOUT = 504
         private const val HTTP_NOT_IMPLEMENTED = 501
+        private const val UPDATE_FEED_URL = "https://api.github.com/repos/Honaro19/FHPlayer/releases/latest"
+        private val VERSION_PATTERN = Regex("""^v?(\d+)\.(\d+)\.(\d+)$""")
 
         private val unsafeHostnameVerifier = HostnameVerifier { _, _ -> true }
 

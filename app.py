@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import os
 import ipaddress
+import logging
+from logging.handlers import RotatingFileHandler
+import re
 import ssl
 import subprocess
 import sys
 import webbrowser
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +24,24 @@ HOST = "127.0.0.1"
 PORT = 8765
 BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC_DIR = BASE_DIR / "static"
+UPDATE_FEED_URL = os.environ.get("FHPLAYER_UPDATE_FEED_URL", "https://api.github.com/repos/Honaro19/FHPlayer/releases/latest")
+VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+
+
+def read_app_version() -> str:
+    candidate_paths = [
+        BASE_DIR / "VERSION",
+        Path(__file__).resolve().parent / "VERSION",
+    ]
+    for candidate_path in candidate_paths:
+        if candidate_path.exists():
+            app_version = candidate_path.read_text(encoding="utf-8").strip()
+            if VERSION_PATTERN.fullmatch(app_version):
+                return app_version.lstrip("v")
+    return "0.0.0"
+
+
+APP_VERSION = read_app_version()
 
 
 def resolve_app_data_dir() -> Path:
@@ -32,6 +54,9 @@ def resolve_app_data_dir() -> Path:
 
 APP_DATA_DIR = resolve_app_data_dir()
 LIBRARY_ROOT = APP_DATA_DIR / "Library"
+SETTINGS_PATH = APP_DATA_DIR / "settings.json"
+LOGS_DIR = APP_DATA_DIR / "Logs"
+APP_LOG_PATH = LOGS_DIR / "fhplayer.log"
 LIBRARY_DIRECTORIES = {
     "video": LIBRARY_ROOT / "Videos",
     "videos": LIBRARY_ROOT / "Videos",
@@ -40,11 +65,250 @@ LIBRARY_DIRECTORIES = {
     "export": LIBRARY_ROOT / "Exports",
     "exports": LIBRARY_ROOT / "Exports",
 }
+LOGGER = logging.getLogger("fhplayer")
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def normalize_update_result(result: Any) -> dict[str, Any] | None:
+    if not isinstance(result, dict):
+        return None
+
+    return {
+        "status": str(result.get("status", "")).strip() or "unknown",
+        "checkedAt": str(result.get("checkedAt", "")).strip(),
+        "currentVersion": str(result.get("currentVersion", "")).strip() or APP_VERSION,
+        "latestVersion": str(result.get("latestVersion", "")).strip(),
+        "updateAvailable": bool(result.get("updateAvailable", False)),
+        "releaseUrl": str(result.get("releaseUrl", "")).strip(),
+        "downloadUrl": str(result.get("downloadUrl", "")).strip(),
+        "assetName": str(result.get("assetName", "")).strip(),
+        "publishedAt": str(result.get("publishedAt", "")).strip(),
+        "message": str(result.get("message", "")).strip(),
+    }
+
+
+def normalize_settings(payload: Any) -> dict[str, Any]:
+    updates_payload = payload.get("updates", {}) if isinstance(payload, dict) else {}
+    return {
+        "updates": {
+            "autoCheckEnabled": bool(updates_payload.get("autoCheckEnabled", False)),
+            "lastResult": normalize_update_result(updates_payload.get("lastResult")),
+        }
+    }
+
+
+def load_settings() -> dict[str, Any]:
+    if not SETTINGS_PATH.exists():
+        return normalize_settings({})
+
+    try:
+        raw_settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return normalize_settings({})
+
+    return normalize_settings(raw_settings)
+
+
+def save_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    normalized_settings = normalize_settings(settings)
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(normalized_settings, indent=2) + "\n", encoding="utf-8")
+    return normalized_settings
+
+
+def build_settings_payload() -> dict[str, Any]:
+    settings = load_settings()
+    return {
+        "ok": True,
+        "currentVersion": APP_VERSION,
+        "settings": settings,
+        "updateSupport": {
+            "configured": bool(UPDATE_FEED_URL),
+            "sourceUrl": UPDATE_FEED_URL,
+        },
+    }
+
+
+def parse_version_parts(version: str) -> tuple[int, int, int] | None:
+    match = VERSION_PATTERN.fullmatch(str(version or "").strip())
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def select_release_asset(assets: Any, platform: str) -> tuple[str, str]:
+    if not isinstance(assets, list):
+        return "", ""
+
+    preferred_suffixes = [".apk", ".aab"] if platform == "android" else [".exe"]
+    normalized_assets = [
+        {
+            "name": str(asset.get("name", "")).strip(),
+            "downloadUrl": str(asset.get("browser_download_url", asset.get("downloadUrl", ""))).strip(),
+        }
+        for asset in assets
+        if isinstance(asset, dict)
+    ]
+    for preferred_suffix in preferred_suffixes:
+        for asset in normalized_assets:
+            if asset["name"].lower().endswith(preferred_suffix) and asset["downloadUrl"]:
+                return asset["downloadUrl"], asset["name"]
+    return "", ""
+
+
+def parse_release_payload(payload: Any, platform: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError("Update feed returned an invalid JSON payload")
+
+    latest_version = str(payload.get("version") or payload.get("latestVersion") or payload.get("tag_name") or payload.get("name") or "").strip()
+    latest_version_parts = parse_version_parts(latest_version)
+    if latest_version_parts is None:
+        raise ValueError("Update feed did not provide a valid semantic version")
+
+    download_url, asset_name = select_release_asset(payload.get("assets", []), platform)
+    current_version_parts = parse_version_parts(APP_VERSION) or (0, 0, 0)
+    normalized_latest_version = ".".join(str(part) for part in latest_version_parts)
+    update_available = latest_version_parts > current_version_parts
+    status = "available" if update_available else "current"
+    release_url = str(payload.get("releaseUrl") or payload.get("html_url") or payload.get("url") or "").strip()
+
+    return {
+        "status": status,
+        "checkedAt": utc_now_iso(),
+        "currentVersion": APP_VERSION,
+        "latestVersion": normalized_latest_version,
+        "updateAvailable": update_available,
+        "releaseUrl": release_url,
+        "downloadUrl": download_url,
+        "assetName": asset_name,
+        "publishedAt": str(payload.get("publishedAt") or payload.get("published_at") or payload.get("created_at") or "").strip(),
+        "message": (
+            f"Version {normalized_latest_version} is available."
+            if update_available
+            else f"You are already on the latest version ({APP_VERSION})."
+        ),
+    }
+
+
+def fetch_update_result(platform: str) -> dict[str, Any]:
+    if not UPDATE_FEED_URL:
+        return {
+            "status": "unconfigured",
+            "checkedAt": utc_now_iso(),
+            "currentVersion": APP_VERSION,
+            "latestVersion": "",
+            "updateAvailable": False,
+            "releaseUrl": "",
+            "downloadUrl": "",
+            "assetName": "",
+            "publishedAt": "",
+            "message": "No update feed is configured.",
+        }
+
+    request = urlrequest.Request(
+        UPDATE_FEED_URL,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": f"FHPlayer/{APP_VERSION}",
+        },
+        method="GET",
+    )
+
+    try:
+        with urlrequest.urlopen(request, timeout=5.0) as response:
+            body = response.read().decode("utf-8")
+    except Exception as exc:
+        return {
+            "status": "error",
+            "checkedAt": utc_now_iso(),
+            "currentVersion": APP_VERSION,
+            "latestVersion": "",
+            "updateAvailable": False,
+            "releaseUrl": "",
+            "downloadUrl": "",
+            "assetName": "",
+            "publishedAt": "",
+            "message": str(exc),
+        }
+
+    try:
+        payload = json.loads(body)
+        return parse_release_payload(payload, platform)
+    except (ValueError, json.JSONDecodeError) as exc:
+        return {
+            "status": "error",
+            "checkedAt": utc_now_iso(),
+            "currentVersion": APP_VERSION,
+            "latestVersion": "",
+            "updateAvailable": False,
+            "releaseUrl": "",
+            "downloadUrl": "",
+            "assetName": "",
+            "publishedAt": "",
+            "message": str(exc),
+        }
 
 
 def ensure_library_directories() -> None:
-    for directory in {APP_DATA_DIR, LIBRARY_ROOT, *LIBRARY_DIRECTORIES.values()}:
+    for directory in {APP_DATA_DIR, LIBRARY_ROOT, LOGS_DIR, *LIBRARY_DIRECTORIES.values()}:
         directory.mkdir(parents=True, exist_ok=True)
+
+
+def setup_logging() -> None:
+    ensure_library_directories()
+    if LOGGER.handlers:
+        return
+
+    LOGGER.setLevel(logging.INFO)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+
+    file_handler = RotatingFileHandler(APP_LOG_PATH, maxBytes=512_000, backupCount=3, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    LOGGER.addHandler(file_handler)
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+    LOGGER.addHandler(stream_handler)
+
+    LOGGER.propagate = False
+
+
+def read_recent_log_text(path: Path, max_lines: int = 120, max_chars: int = 16_000) -> str:
+    if not path.exists():
+        return ""
+
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+    lines = content.splitlines()
+    recent_text = "\n".join(lines[-max_lines:])
+    if len(recent_text) > max_chars:
+        recent_text = recent_text[-max_chars:]
+    return recent_text
+
+
+def build_diagnostics_payload() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "platform": "desktop",
+        "version": APP_VERSION,
+        "paths": {
+            "appData": str(APP_DATA_DIR),
+            "libraryRoot": str(LIBRARY_ROOT),
+            "settingsFile": str(SETTINGS_PATH),
+            "logDirectory": str(LOGS_DIR),
+            "logFile": str(APP_LOG_PATH),
+        },
+        "capabilities": {
+            "openLogFolder": True,
+        },
+        "recentLog": read_recent_log_text(APP_LOG_PATH),
+    }
 
 
 def sanitize_library_filename(file_name: str) -> str:
@@ -269,15 +533,24 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
                 {
                     "ok": True,
                     "port": PORT,
+                    "version": APP_VERSION,
                     "platform": "desktop",
                     "capabilities": {
                         "lovense": True,
+                        "updates": True,
+                        "diagnostics": True,
                     },
                 }
             )
             return
         if parsed.path == "/api/library/info":
             self._send_json(build_library_payload())
+            return
+        if parsed.path == "/api/settings":
+            self._send_json(build_settings_payload())
+            return
+        if parsed.path == "/api/diagnostics/info":
+            self._send_json(build_diagnostics_payload())
             return
 
         if parsed.path == "/":
@@ -298,6 +571,15 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
             return
         if route == "/api/library/open":
             self._handle_library_open(parsed)
+            return
+        if route == "/api/settings":
+            self._handle_settings_update()
+            return
+        if route == "/api/update/check":
+            self._handle_update_check()
+            return
+        if route == "/api/diagnostics/open":
+            self._handle_diagnostics_open()
             return
 
         self.send_error(HTTPStatus.NOT_FOUND, "Unknown API route")
@@ -332,6 +614,7 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.GATEWAY_TIMEOUT)
             return
         except Exception as exc:  # pragma: no cover
+            LOGGER.exception("Lovense detection failed with an unexpected error.")
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
@@ -366,6 +649,7 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc), "results": results}, status=HTTPStatus.GATEWAY_TIMEOUT)
             return
         except Exception as exc:  # pragma: no cover
+            LOGGER.exception("Lovense command execution failed with an unexpected error.")
             self._send_json({"ok": False, "error": str(exc), "results": results}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
@@ -401,6 +685,7 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
                 "sizeBytes": destination.stat().st_size,
             }
         )
+        LOGGER.info("Imported %s into %s", destination.name, target_directory)
 
     def _handle_library_open(self, parsed: Any) -> None:
         query = parse_qs(parsed.query, keep_blank_values=True)
@@ -416,9 +701,69 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
 
         self._send_json({"ok": True, "path": str(target_directory)})
 
+    def _handle_diagnostics_open(self) -> None:
+        try:
+            open_in_file_manager(LOGS_DIR)
+        except OSError as exc:
+            LOGGER.exception("Could not open diagnostics folder.")
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self._send_json({"ok": True, "path": str(LOGS_DIR)})
+
+    def _handle_settings_update(self) -> None:
+        try:
+            payload = parse_json_body(self)
+        except ValueError as exc:
+            self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+            return
+
+        current_settings = load_settings()
+        updates_payload = payload.get("updates", {}) if isinstance(payload, dict) else {}
+        current_settings["updates"]["autoCheckEnabled"] = bool(updates_payload.get("autoCheckEnabled", False))
+
+        try:
+            saved_settings = save_settings(current_settings)
+        except OSError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self._send_json(
+            {
+                "ok": True,
+                "currentVersion": APP_VERSION,
+                "settings": saved_settings,
+                "updateSupport": {
+                    "configured": bool(UPDATE_FEED_URL),
+                    "sourceUrl": UPDATE_FEED_URL,
+                },
+            }
+        )
+
+    def _handle_update_check(self) -> None:
+        update_result = fetch_update_result(platform="desktop")
+        current_settings = load_settings()
+        current_settings["updates"]["lastResult"] = update_result
+
+        try:
+            saved_settings = save_settings(current_settings)
+        except OSError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self._send_json(
+            {
+                "ok": update_result.get("status") != "error",
+                "currentVersion": APP_VERSION,
+                "result": update_result,
+                "settings": saved_settings,
+            },
+            status=HTTPStatus.OK if update_result.get("status") != "error" else HTTPStatus.BAD_GATEWAY,
+        )
+        LOGGER.info("Update check finished with status=%s latest=%s", update_result.get("status"), update_result.get("latestVersion"))
+
     def log_message(self, format: str, *args: Any) -> None:
-        message = "%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format % args)
-        print(message, end="")
+        LOGGER.info('%s - - [%s] %s', self.address_string(), self.log_date_time_string(), format % args)
 
     def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -432,6 +777,7 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
 
 def main() -> None:
     try:
+        setup_logging()
         ensure_library_directories()
         if not STATIC_DIR.exists():
             error_msg = f"Missing static assets in {STATIC_DIR}\nBASE_DIR: {BASE_DIR}\nCwd: {os.getcwd()}"
@@ -443,6 +789,9 @@ def main() -> None:
         print(f"FHPlayer is running at {url}")
         print(f"Library root: {LIBRARY_ROOT}")
         print("Press Ctrl+C to stop.")
+        LOGGER.info("FHPlayer desktop server starting at %s", url)
+        LOGGER.info("Library root: %s", LIBRARY_ROOT)
+        LOGGER.info("Log file: %s", APP_LOG_PATH)
 
         if not os.environ.get("FHPLAYER_NO_BROWSER"):
             webbrowser.open(url)
@@ -451,11 +800,15 @@ def main() -> None:
             server.serve_forever()
         except KeyboardInterrupt:
             print("\nShutting down server.")
+            LOGGER.info("FHPlayer desktop server interrupted by user.")
         finally:
             server.server_close()
+            LOGGER.info("FHPlayer desktop server stopped.")
     except Exception as e:
         error_msg = f"Error: {type(e).__name__}: {e}"
         print(error_msg, flush=True)
+        if LOGGER.handlers:
+            LOGGER.exception("FHPlayer desktop server crashed.")
 
         error_log = Path.home() / "Desktop" / "FHPlayer_error.log"
         try:

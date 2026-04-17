@@ -38,6 +38,103 @@ On startup FHPlayer creates a managed library under:
 - Windows desktop: `%LOCALAPPDATA%\FHPlayer\Library\Videos`, `%LOCALAPPDATA%\FHPlayer\Library\Funscripts`, `%LOCALAPPDATA%\FHPlayer\Library\Exports`
 - Android app: app-managed `Library/Videos`, `Library/Funscripts`, and `Library/Exports` folders inside the app storage area
 
+## Quick Start
+
+### Desktop
+
+1. Start FHPlayer with `python app.py` or the built Windows executable.
+2. Wait for the browser window to open at `http://127.0.0.1:8765`.
+3. Select one or more video files.
+4. Select the matching `.funscript` or `.json` files.
+5. Leave `Dry Run` enabled for the first test.
+6. Configure `Lovense live` or `Lovense test`.
+7. Click `Add to playlist`.
+8. Click `Enable execution`.
+9. Load the playlist entry and start the video.
+
+### Android
+
+1. Install `installers\android\FHPlayer-<version>-debug.apk` for debug use or the release APK once you have one.
+2. Start the app.
+3. Select videos and then the matching `.funscript` or `.json` files through the Android document picker.
+4. Keep `Dry Run` enabled for the first test.
+5. Configure `Lovense live` or `Lovense test`.
+6. Add the entry to the playlist and start playback.
+
+### First Lovense Connection
+
+1. Use `Lovense test` first if you only want to validate the rule logic.
+2. For desktop Lovense Remote defaults, start with `HTTPS`, `127.0.0.1`, and port `30010`.
+3. For a phone running Lovense Remote, usually use `HTTP`, the phone IP, and the port shown by the Lovense app.
+4. Click `Detect devices`.
+5. Select one or more devices from the device list.
+6. Confirm any first-time Lovense permission or pairing popup before testing live playback.
+
+## Updates
+
+FHPlayer now includes an optional update check in the UI:
+
+- `Check automatically on startup` is off by default and can be enabled or disabled by the user at any time
+- `Check now` always remains available for a manual check
+- The desktop and Android app both compare the current version against the latest GitHub release of `Honaro19/FHPlayer`
+
+By default the app checks:
+
+```text
+https://api.github.com/repos/Honaro19/FHPlayer/releases/latest
+```
+
+On desktop you can override that feed URL for testing or custom hosting:
+
+```powershell
+$env:FHPLAYER_UPDATE_FEED_URL = "https://example.com/releases/latest.json"
+python app.py
+```
+
+The update preference and the last result are stored locally:
+
+- Desktop: `%LOCALAPPDATA%\FHPlayer\settings.json`
+- Android: `fhplayer-settings.json` inside the app files directory
+
+## Diagnostics
+
+FHPlayer now keeps a rotating local application log and exposes the most important diagnostic paths in the UI.
+
+Stored diagnostic files:
+
+- Desktop: `%LOCALAPPDATA%\FHPlayer\Logs\fhplayer.log`
+- Android: `logs/fhplayer.log` inside the app files directory
+
+The Diagnostics panel in the UI shows:
+
+- app data, library, settings, and log paths
+- recent log output from the embedded backend
+- on desktop only: a button to open the log folder directly
+
+## Release Check
+
+Run the consolidated release verification with:
+
+```powershell
+.\scripts\release_check.ps1
+```
+
+That combines:
+
+- Python, JavaScript, and PowerShell syntax checks
+- rule-engine tests
+- the full smoke test runner
+- Windows release installer build verification
+- Android release APK and AAB build verification
+
+Useful options:
+
+- `-SkipAndroidInstall` if no emulator or device is connected
+- `-AndroidDeviceSerial <serial>` to target a specific Android device
+- `-WindowsSigningMode Skip|Auto|Require`
+- `-AndroidSigningMode Skip|Auto|Require`
+- `-KeepArtifacts` to keep the full `.tmp\release-checks\...` output
+
 ## Windows EXE
 
 You can package FHPlayer as a Windows `.exe` with PyInstaller.
@@ -108,6 +205,43 @@ The setup executable is written to:
 installers\windows\FHPlayer-Setup.exe
 ```
 
+## Windows Release Build
+
+Use the release wrapper when you want a versioned installer name and optional code signing:
+
+```powershell
+.\build_windows_release.ps1
+```
+
+That writes:
+
+```text
+installers\windows\FHPlayer-<version>-Setup.exe
+```
+
+Unsigned release builds are allowed with:
+
+```powershell
+.\build_windows_release.ps1 -SigningMode Skip
+```
+
+To require code signing, provide either a certificate file or a certificate thumbprint:
+
+```powershell
+.\build_windows_release.ps1 `
+  -SigningMode Require `
+  -CertificatePath C:\secure\fhplayer-signing.pfx `
+  -CertificatePassword "<password>"
+```
+
+Or through environment variables:
+
+- `FHPLAYER_WINDOWS_SIGN_CERT_PATH`
+- `FHPLAYER_WINDOWS_SIGN_CERT_PASSWORD`
+- `FHPLAYER_WINDOWS_SIGN_CERT_THUMBPRINT`
+- `FHPLAYER_WINDOWS_SIGNTOOL_PATH`
+- `FHPLAYER_WINDOWS_SIGN_TIMESTAMP_URL`
+
 ## Mobile Version
 
 FHPlayer now includes an Android app target in `FHPlayerMobile/android`.
@@ -163,6 +297,44 @@ Current Android limitations:
 - The Android installer artifact is the APK itself. For a distributable release build, add a release keystore and build a signed release APK.
 - On first app start FHPlayer creates the managed `Library\Videos`, `Library\Funscripts`, and `Library\Exports` folders inside the app storage area.
 
+## Android Release Build
+
+Build release artifacts with:
+
+```powershell
+FHPlayerMobile\android\build_release_artifacts.ps1
+```
+
+That produces:
+
+```text
+installers\android\FHPlayer-<version>.apk
+installers\android\FHPlayer-<version>.aab
+```
+
+If no signing configuration is present, the script builds unsigned release artifacts by default and tells you so.
+
+To require signing, copy `FHPlayerMobile\android\release-signing.example.properties` to `FHPlayerMobile\android\release-signing.properties` and fill in the real values, or provide the same values through environment variables:
+
+- `FHPLAYER_ANDROID_KEYSTORE_PATH`
+- `FHPLAYER_ANDROID_KEYSTORE_PASSWORD`
+- `FHPLAYER_ANDROID_KEY_ALIAS`
+- `FHPLAYER_ANDROID_KEY_PASSWORD`
+
+Then build with:
+
+```powershell
+FHPlayerMobile\android\build_release_artifacts.ps1 -SigningMode Require
+```
+
+Useful options:
+
+- `-SkipApk`
+- `-SkipBundle`
+- `-BuildDir .tmp\android-release-build\app`
+- `-OutputDir .tmp\android-release-output`
+- `-SigningPropertiesPath .\FHPlayerMobile\android\release-signing.properties`
+
 ## Smoke Tests
 
 Run the reusable smoke-test runner with:
@@ -195,25 +367,55 @@ Or directly with npm:
 npm run test:rules
 ```
 
-## Usage
+## Daily Use
 
-1. Load one or more video files.
-2. Load the matching `funscript` files.
-   Saved FHPlayer metadata from the first selected `funscript` is applied to the form immediately.
-3. Optional: click `Import selected files` to copy the currently selected videos and funscripts into the managed FHPlayer library folders shown in the UI.
-4. Choose the execution mode for new playlist entries.
-5. For `Lovense live`, choose or create a user profile, configure protocol, host/IP, port, platform name, detect devices, select one or more devices for that profile, and enter the rule script.
-   On desktop the default profile uses `HTTPS` with `127.0.0.1:30010`.
-6. For phone-based Lovense setups, switch to `HTTP` when needed and enter the phone IP and port shown by the Lovense app.
-   With `Lovense Remote` on PC, the pairing/permission popup may appear only the first time you connect FHPlayer to that Lovense host. After you confirm it once, later detections may connect without showing the popup again.
-7. For `Lovense test`, pick one or more simulated devices from the normal device dropdown and reuse the same rule editor. On desktop, multi-select uses `Ctrl` + click on Windows/Linux or `Cmd` + click on macOS.
+1. Select one or more videos.
+2. Select the matching `.funscript` or `.json` files.
+   FHPlayer applies saved FHPlayer metadata from the first selected script immediately when available.
+3. Optional: click `Import selected files` if you want copies inside the managed FHPlayer library.
+4. Choose `Lovense live` or `Lovense test`.
+5. For `Lovense live`, select or create a connection profile, enter host settings, click `Detect devices`, and select the devices you want to use.
+6. For `Lovense test`, select one or more simulated devices from the same device list.
+7. Review or edit the rule script.
 8. Click `Add to playlist`.
-9. If needed, adjust the selected entry and click `Save selected entry`.
-10. Click `Save to funscript` if you want to write the current Lovense settings back into the matching script file.
-   If direct file saving is unavailable, FHPlayer stores the updated file in the managed `Exports` folder instead.
-11. Choose playlist mode `Sequential` or `Random`.
-12. Test with `Dry Run` enabled first.
-13. Click `Enable execution` and start the video.
+9. Use `Save selected entry` after later changes to the selected playlist item.
+10. Use `Save to funscript` if you want to store the current FHPlayer settings back into the script file.
+11. Choose `Sequential` or `Random` playlist mode.
+12. Leave `Dry Run` enabled until the setup behaves correctly.
+13. Click `Enable execution`, then load and play the video.
+
+## Common Problems
+
+### No Lovense devices are detected
+
+- On desktop, try the default local setup first: `HTTPS`, `127.0.0.1`, port `30010`.
+- On phone-based setups, switch to `HTTP` and use the phone IP and port shown by the Lovense app.
+- Confirm any first-time Lovense permission popup before retrying detection.
+- Check the Diagnostics panel in the UI and the local log file if detection still fails.
+
+### The wrong files were selected
+
+- Video selection accepts video files only.
+- Funscript selection should contain `.funscript` or `.json` only.
+- On Android, FHPlayer rejects unsupported files after the picker returns them.
+
+### Save to funscript does not overwrite the original file
+
+- Direct overwrite depends on browser or Android document access support.
+- If overwrite is unavailable, use the exported file from the managed `Exports` folder.
+
+### Playback triggers nothing
+
+- Make sure `Enable execution` is active.
+- Check whether `Dry Run` is still enabled.
+- Verify that at least one real or simulated device is selected.
+- Review the live rule validation status before starting playback.
+
+### The app starts but the browser UI does not load correctly
+
+- Verify that `http://127.0.0.1:8765/api/health` responds.
+- Check the Diagnostics panel or `%LOCALAPPDATA%\FHPlayer\Logs\fhplayer.log` on desktop.
+- Run `.\scripts\smoke_test.ps1` or `.\scripts\release_check.ps1 -SkipAndroidInstall` if you want a full local verification pass.
 
 ## File Matching
 

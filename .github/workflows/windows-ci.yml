@@ -49,10 +49,13 @@ jobs:
           $files = @(
             '.\build_windows.ps1',
             '.\build_windows_installer.ps1',
+            '.\build_windows_release.ps1',
             '.\FHPlayerMobile\android\build_debug_apk.ps1',
             '.\FHPlayerMobile\android\install_debug_apk.ps1',
+            '.\FHPlayerMobile\android\build_release_artifacts.ps1',
             '.\scripts\smoke_test.ps1',
-            '.\scripts\test_rule_engine.ps1'
+            '.\scripts\test_rule_engine.ps1',
+            '.\scripts\release_check.ps1'
           )
           foreach ($file in $files) {
             $errors = $null

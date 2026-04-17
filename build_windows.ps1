@@ -49,6 +49,7 @@ try {
   $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
   $staticDir = Join-Path $projectRoot "static"
   $staticBundleFiles = @("index.html", "styles.css", "playlist-app.js")
+  $versionPath = Join-Path $projectRoot "VERSION"
   $brandingScript = Join-Path $projectRoot "assets\\branding\\generate_brand_assets.ps1"
   $iconPath = Join-Path $projectRoot "assets\\branding\\fhplayer.ico"
   $buildToken = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -90,6 +91,9 @@ try {
   if (-not (Test-Path $iconPath)) {
     Write-Warning "Missing Windows icon asset at $iconPath. The executable will use the default icon."
   }
+  if (-not (Test-Path $versionPath)) {
+    throw "Missing VERSION file at $versionPath"
+  }
 
   $versionOutput = & $launcher[0] $launcher[1] $launcher[2] --version 2>&1
   if ($LASTEXITCODE -ne 0) {
@@ -106,6 +110,7 @@ try {
     --distpath $tempDistDir `
     --workpath $tempBuildDir `
     --add-data "${tempStaticDir};static" `
+    --add-data "${versionPath};." `
     $(if (Test-Path $iconPath) { "--icon"; $iconPath }) `
     app.py
 

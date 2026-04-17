@@ -22,6 +22,8 @@ const DEFAULT_LOVENSE_CONFIG = {
     },
   ],
 };
+const ACCEPTED_FUNSCRIPT_EXTENSIONS = new Set(["funscript", "json"]);
+const ACCEPTED_FUNSCRIPT_MIME_TYPES = new Set(["application/json", "text/json"]);
 const LOVENSE_ACTIONS = {
   all: {
     apiName: "All",
@@ -238,9 +240,38 @@ const state = {
   logCount: 0,
   pendingExecutions: 0,
   playbackMode: "sequential",
+  currentVersion: "",
   backendCapabilities: {
     lovense: true,
     platform: "desktop",
+    updates: false,
+    diagnostics: false,
+  },
+  updateSupport: {
+    configured: false,
+    sourceUrl: "",
+  },
+  appSettings: {
+    updates: {
+      autoCheckEnabled: false,
+      lastResult: null,
+    },
+  },
+  diagnostics: {
+    available: false,
+    platform: "desktop",
+    version: "",
+    paths: {
+      appData: "",
+      libraryRoot: "",
+      settingsFile: "",
+      logDirectory: "",
+      logFile: "",
+    },
+    capabilities: {
+      openLogFolder: false,
+    },
+    recentLog: "",
   },
   library: {
     available: false,
@@ -270,6 +301,14 @@ const ui = {
   pendingCount: document.getElementById("pending-count"),
   libraryStatus: document.getElementById("library-status"),
   libraryPaths: document.getElementById("library-paths"),
+  updateVersionLabel: document.getElementById("update-version-label"),
+  updateAutoCheck: document.getElementById("update-auto-check"),
+  checkUpdatesButton: document.getElementById("check-updates-button"),
+  updateReleaseLink: document.getElementById("update-release-link"),
+  updateStatus: document.getElementById("update-status"),
+  diagnosticsStatus: document.getElementById("diagnostics-status"),
+  diagnosticsPaths: document.getElementById("diagnostics-paths"),
+  diagnosticsLog: document.getElementById("diagnostics-log"),
   currentEntryTitle: document.getElementById("current-entry-title"),
   currentEntryMeta: document.getElementById("current-entry-meta"),
   currentTime: document.getElementById("current-time"),
@@ -309,6 +348,8 @@ const ui = {
   openVideoLibraryButton: document.getElementById("open-video-library-button"),
   openFunscriptLibraryButton: document.getElementById("open-funscript-library-button"),
   openExportsLibraryButton: document.getElementById("open-exports-library-button"),
+  refreshDiagnosticsButton: document.getElementById("refresh-diagnostics-button"),
+  openDiagnosticsButton: document.getElementById("open-diagnostics-button"),
   playSelectedButton: document.getElementById("play-selected-button"),
   nextButton: document.getElementById("next-button"),
   removeEntryButton: document.getElementById("remove-entry-button"),
@@ -330,7 +371,13 @@ async function init() {
   ui.lovenseRules.value = DEFAULT_RULES_TEXT;
   applyLovenseConfigToForm(DEFAULT_LOVENSE_CONFIG, { resetDetectedToys: true });
   await checkBackend();
+  await loadAppSettings();
   await refreshLibraryInfo();
+  await loadDiagnosticsInfo();
+  renderUpdateSettings();
+  if (state.backendCapabilities.updates && state.appSettings.updates.autoCheckEnabled) {
+    await checkForUpdates({ automatic: true });
+  }
   renderExecutionModeForm();
   renderLovenseToySelect(getCurrentSelectedToyIds(), getCurrentAvailableToys());
   renderLovenseActionRanges(resolveLovenseRuleConfig(null, { allowOfflineTest: true, requireToyId: false }), {
@@ -363,6 +410,8 @@ function bindEvents() {
   ui.openVideoLibraryButton.addEventListener("click", () => openLibraryDirectory("videos"));
   ui.openFunscriptLibraryButton.addEventListener("click", () => openLibraryDirectory("funscripts"));
   ui.openExportsLibraryButton.addEventListener("click", () => openLibraryDirectory("exports"));
+  ui.refreshDiagnosticsButton.addEventListener("click", loadDiagnosticsInfo);
+  ui.openDiagnosticsButton.addEventListener("click", openDiagnosticsFolder);
   ui.lovenseConnectionSelect.addEventListener("change", handleLovenseConnectionSelectionChange);
   ui.lovenseConnectionName.addEventListener("input", handleLovenseConnectionFieldInput);
   ui.lovenseScheme.addEventListener("change", handleLovenseConnectionFieldInput);
@@ -380,6 +429,8 @@ function bindEvents() {
   ui.clearLogButton.addEventListener("click", clearLog);
   ui.playlistMode.addEventListener("change", handlePlaybackModeChange);
   ui.playlistList.addEventListener("click", handlePlaylistListClick);
+  ui.updateAutoCheck.addEventListener("change", handleUpdateAutoCheckChange);
+  ui.checkUpdatesButton.addEventListener("click", () => checkForUpdates({ automatic: false }));
 
   ui.video.addEventListener("play", startSchedulerLoop);
   ui.video.addEventListener("pause", handleVideoPause);
@@ -400,11 +451,323 @@ async function checkBackend() {
     state.backendCapabilities = {
       lovense: data.capabilities?.lovense !== false,
       platform: data.platform || "desktop",
+      updates: data.capabilities?.updates === true,
+      diagnostics: data.capabilities?.diagnostics === true,
     };
+    state.currentVersion = String(data.version || "");
     ui.backendStatus.textContent = state.backendCapabilities.platform === "android" ? "Connected (Android)" : "Connected";
   } catch (error) {
     ui.backendStatus.textContent = "Unavailable";
     appendLog({ ok: false, title: "Backend unavailable", detail: String(error) });
+  }
+}
+
+async function loadAppSettings() {
+  if (!state.backendCapabilities.updates) {
+    renderUpdateSettings();
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/settings", { cache: "no-store" });
+    const data = await parseJsonResponse(response);
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+
+    state.currentVersion = String(data.currentVersion || state.currentVersion || "");
+    state.updateSupport = {
+      configured: data.updateSupport?.configured === true,
+      sourceUrl: String(data.updateSupport?.sourceUrl || ""),
+    };
+    state.appSettings = normalizeAppSettings(data.settings);
+  } catch (error) {
+    state.updateSupport = {
+      configured: false,
+      sourceUrl: "",
+    };
+    state.appSettings = normalizeAppSettings({});
+    renderUpdateStatus({
+      status: "error",
+      message: `Could not load update settings: ${String(error)}`,
+    });
+  }
+}
+
+function normalizeAppSettings(settings) {
+  return {
+    updates: {
+      autoCheckEnabled: settings?.updates?.autoCheckEnabled === true,
+      lastResult: normalizeUpdateResult(settings?.updates?.lastResult),
+    },
+  };
+}
+
+function normalizeUpdateResult(result) {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+
+  return {
+    status: String(result.status || "unknown"),
+    checkedAt: String(result.checkedAt || ""),
+    currentVersion: String(result.currentVersion || state.currentVersion || ""),
+    latestVersion: String(result.latestVersion || ""),
+    updateAvailable: result.updateAvailable === true,
+    releaseUrl: String(result.releaseUrl || ""),
+    downloadUrl: String(result.downloadUrl || ""),
+    assetName: String(result.assetName || ""),
+    publishedAt: String(result.publishedAt || ""),
+    message: String(result.message || ""),
+  };
+}
+
+function renderUpdateSettings() {
+  ui.updateVersionLabel.textContent = state.currentVersion ? `Version ${state.currentVersion}` : "Version unknown";
+  ui.updateAutoCheck.disabled = !state.backendCapabilities.updates;
+  ui.checkUpdatesButton.disabled = !state.backendCapabilities.updates;
+  ui.updateAutoCheck.checked = state.appSettings.updates.autoCheckEnabled;
+
+  if (!state.backendCapabilities.updates) {
+    renderUpdateStatus({
+      status: "muted",
+      message: "Update checks are not available in the current backend.",
+    });
+    return;
+  }
+
+  if (!state.updateSupport.configured) {
+    renderUpdateStatus({
+      status: "muted",
+      message: "The update feed is not configured yet. You can still keep the option disabled.",
+    });
+    return;
+  }
+
+  if (state.appSettings.updates.lastResult) {
+    renderUpdateStatus(state.appSettings.updates.lastResult);
+    return;
+  }
+
+  renderUpdateStatus({
+    status: "muted",
+    message: state.appSettings.updates.autoCheckEnabled
+      ? "Automatic update checks are enabled and will run on startup."
+      : "Automatic update checks are disabled. Use Check now whenever you want.",
+  });
+}
+
+function renderUpdateStatus(result) {
+  const status = String(result?.status || "muted");
+  const checkedAt = String(result?.checkedAt || "");
+  const latestVersion = String(result?.latestVersion || "");
+  const releaseUrl = String(result?.downloadUrl || result?.releaseUrl || "");
+  const message = String(result?.message || "");
+  const detailLines = [];
+  if (message) {
+    detailLines.push(message);
+  }
+  if (latestVersion) {
+    detailLines.push(`Latest known version: ${latestVersion}`);
+  }
+  if (checkedAt) {
+    detailLines.push(`Last checked: ${checkedAt}`);
+  }
+  if (!detailLines.length) {
+    detailLines.push("No update information available yet.");
+  }
+
+  ui.updateStatus.className = `status-note ${status === "available" || status === "current" ? "ok" : status === "error" ? "error" : "muted"}`;
+  ui.updateStatus.textContent = detailLines.join("\n");
+
+  if (releaseUrl) {
+    ui.updateReleaseLink.href = releaseUrl;
+    ui.updateReleaseLink.classList.remove("hidden");
+  } else {
+    ui.updateReleaseLink.href = "#";
+    ui.updateReleaseLink.classList.add("hidden");
+  }
+}
+
+async function handleUpdateAutoCheckChange() {
+  const previousValue = state.appSettings.updates.autoCheckEnabled;
+  state.appSettings.updates.autoCheckEnabled = ui.updateAutoCheck.checked;
+  renderUpdateSettings();
+
+  try {
+    const response = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        updates: {
+          autoCheckEnabled: state.appSettings.updates.autoCheckEnabled,
+        },
+      }),
+    });
+    const data = await parseJsonResponse(response);
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+
+    state.currentVersion = String(data.currentVersion || state.currentVersion || "");
+    state.updateSupport = {
+      configured: data.updateSupport?.configured === true,
+      sourceUrl: String(data.updateSupport?.sourceUrl || state.updateSupport.sourceUrl || ""),
+    };
+    state.appSettings = normalizeAppSettings(data.settings);
+    renderUpdateSettings();
+
+    if (state.appSettings.updates.autoCheckEnabled) {
+      await checkForUpdates({ automatic: true });
+    }
+  } catch (error) {
+    state.appSettings.updates.autoCheckEnabled = previousValue;
+    ui.updateAutoCheck.checked = previousValue;
+    renderUpdateStatus({
+      status: "error",
+      message: `Could not save update setting: ${String(error)}`,
+    });
+  }
+}
+
+async function checkForUpdates({ automatic = false } = {}) {
+  if (!state.backendCapabilities.updates) {
+    return;
+  }
+
+  ui.checkUpdatesButton.disabled = true;
+  try {
+    const response = await fetch("/api/update/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ automatic }),
+    });
+    const data = await parseJsonResponse(response);
+    state.currentVersion = String(data.currentVersion || state.currentVersion || "");
+    state.appSettings = normalizeAppSettings(data.settings);
+    state.appSettings.updates.lastResult = normalizeUpdateResult(data.result) || state.appSettings.updates.lastResult;
+    if (!response.ok || !data.ok) {
+      renderUpdateSettings();
+      throw new Error(data.error || data.result?.message || `HTTP ${response.status}`);
+    }
+
+    renderUpdateSettings();
+  } catch (error) {
+    renderUpdateStatus({
+      status: "error",
+      message: `Update check failed: ${String(error)}`,
+    });
+    if (!automatic) {
+      appendLog({ ok: false, title: "Update check failed", detail: String(error) });
+    }
+  } finally {
+    ui.checkUpdatesButton.disabled = !state.backendCapabilities.updates;
+  }
+}
+
+function normalizeDiagnosticsInfo(payload) {
+  return {
+    available: payload?.ok === true,
+    platform: String(payload?.platform || state.backendCapabilities.platform || "desktop"),
+    version: String(payload?.version || state.currentVersion || ""),
+    paths: {
+      appData: String(payload?.paths?.appData || ""),
+      libraryRoot: String(payload?.paths?.libraryRoot || ""),
+      settingsFile: String(payload?.paths?.settingsFile || ""),
+      logDirectory: String(payload?.paths?.logDirectory || ""),
+      logFile: String(payload?.paths?.logFile || ""),
+    },
+    capabilities: {
+      openLogFolder: payload?.capabilities?.openLogFolder === true,
+    },
+    recentLog: String(payload?.recentLog || ""),
+  };
+}
+
+function renderDiagnosticsInfo() {
+  if (!ui.diagnosticsStatus || !ui.diagnosticsPaths || !ui.diagnosticsLog) {
+    return;
+  }
+
+  if (!state.backendCapabilities.diagnostics) {
+    ui.diagnosticsStatus.textContent = "Diagnostics unavailable";
+    ui.diagnosticsPaths.value = "The current backend does not expose diagnostics information.";
+    ui.diagnosticsLog.value = "No diagnostic log output is available.";
+    ui.refreshDiagnosticsButton.disabled = true;
+    ui.openDiagnosticsButton.disabled = true;
+    ui.openDiagnosticsButton.classList.add("hidden");
+    return;
+  }
+
+  if (!state.diagnostics.available) {
+    ui.diagnosticsStatus.textContent = "Diagnostics not loaded";
+    ui.diagnosticsPaths.value = "Could not load diagnostics information from the backend.";
+    ui.diagnosticsLog.value = "No diagnostic log output is available yet.";
+    ui.refreshDiagnosticsButton.disabled = false;
+    ui.openDiagnosticsButton.disabled = true;
+    ui.openDiagnosticsButton.classList.add("hidden");
+    return;
+  }
+
+  ui.diagnosticsStatus.textContent = state.diagnostics.version
+    ? `${state.diagnostics.platform} | v${state.diagnostics.version}`
+    : state.diagnostics.platform;
+  ui.diagnosticsPaths.value = [
+    `App data: ${state.diagnostics.paths.appData || "-"}`,
+    `Library root: ${state.diagnostics.paths.libraryRoot || "-"}`,
+    `Settings: ${state.diagnostics.paths.settingsFile || "-"}`,
+    `Log directory: ${state.diagnostics.paths.logDirectory || "-"}`,
+    `Log file: ${state.diagnostics.paths.logFile || "-"}`,
+  ].join("\n");
+  ui.diagnosticsLog.value = state.diagnostics.recentLog || "No recent log output has been written yet.";
+  ui.refreshDiagnosticsButton.disabled = false;
+  ui.openDiagnosticsButton.disabled = !state.diagnostics.capabilities.openLogFolder;
+  ui.openDiagnosticsButton.classList.toggle("hidden", !state.diagnostics.capabilities.openLogFolder);
+}
+
+async function loadDiagnosticsInfo() {
+  if (!state.backendCapabilities.diagnostics) {
+    renderDiagnosticsInfo();
+    return;
+  }
+
+  ui.refreshDiagnosticsButton.disabled = true;
+  try {
+    const response = await fetch("/api/diagnostics/info", { cache: "no-store" });
+    const data = await parseJsonResponse(response);
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+    state.diagnostics = normalizeDiagnosticsInfo(data);
+    renderDiagnosticsInfo();
+  } catch (error) {
+    state.diagnostics = normalizeDiagnosticsInfo({});
+    renderDiagnosticsInfo();
+    appendLog({ ok: false, title: "Diagnostics unavailable", detail: String(error) });
+  } finally {
+    ui.refreshDiagnosticsButton.disabled = !state.backendCapabilities.diagnostics;
+  }
+}
+
+async function openDiagnosticsFolder() {
+  if (!state.diagnostics.capabilities.openLogFolder) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/diagnostics/open", {
+      method: "POST",
+    });
+    const data = await parseJsonResponse(response);
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+  } catch (error) {
+    appendLog({
+      ok: false,
+      title: "Could not open diagnostics folder",
+      detail: String(error),
+    });
   }
 }
 
@@ -686,6 +1049,13 @@ async function handleAddToPlaylist() {
     return;
   }
 
+  try {
+    validateSelectedFunscriptFiles(funscriptFiles);
+  } catch (error) {
+    appendLog({ ok: false, title: "Could not extend playlist", detail: String(error) });
+    return;
+  }
+
   let parsedScripts;
   try {
     const selectedDocuments = await getSelectedDocumentsForFiles("funscripts", funscriptFiles);
@@ -737,6 +1107,13 @@ async function handleAddToPlaylist() {
 async function handleFunscriptSelectionPreview() {
   const funscriptFiles = Array.from(ui.funscriptFiles.files ?? []);
   if (!funscriptFiles.length) {
+    return;
+  }
+
+  try {
+    validateSelectedFunscriptFiles(funscriptFiles);
+  } catch (error) {
+    appendLog({ ok: false, title: "Could not read funscript", detail: String(error) });
     return;
   }
 
@@ -796,6 +1173,17 @@ async function handleImportSelectedFilesToLibrary() {
       ok: false,
       title: "Nothing to import",
       detail: "Select one or more videos or funscripts first.",
+    });
+    return;
+  }
+
+  try {
+    validateSelectedFunscriptFiles(funscriptFiles);
+  } catch (error) {
+    appendLog({
+      ok: false,
+      title: "Library import failed",
+      detail: String(error),
     });
     return;
   }
@@ -1418,6 +1806,36 @@ async function parseFunscriptFile(file, sourceDocument = null) {
   };
 }
 
+function validateSelectedFunscriptFiles(files) {
+  const invalidFiles = files.filter((file) => !isAcceptedFunscriptFile(file));
+  if (!invalidFiles.length) {
+    return;
+  }
+
+  throw new Error(
+    `Only .funscript and .json files are allowed for funscripts. Invalid selection: ${invalidFiles.map((file) => file.name).join(", ")}`,
+  );
+}
+
+function isAcceptedFunscriptFile(file) {
+  const extension = getFileExtension(file.name);
+  if (ACCEPTED_FUNSCRIPT_EXTENSIONS.has(extension)) {
+    return true;
+  }
+
+  return ACCEPTED_FUNSCRIPT_MIME_TYPES.has(String(file.type || "").trim().toLowerCase());
+}
+
+function getFileExtension(fileName) {
+  const normalizedName = String(fileName || "").trim().toLowerCase();
+  const lastDotIndex = normalizedName.lastIndexOf(".");
+  if (lastDotIndex < 0 || lastDotIndex === normalizedName.length - 1) {
+    return "";
+  }
+
+  return normalizedName.slice(lastDotIndex + 1);
+}
+
 function pairVideosWithScripts(videoFiles, parsedScripts) {
   const pairs = [];
   const unmatchedVideos = [];
@@ -1604,13 +2022,31 @@ function normalizeLovenseConfig(config) {
     ...DEFAULT_LOVENSE_CONFIG,
     ...(config || {}),
   };
+  const explicitConnections = Array.isArray(config?.connections) ? config.connections : null;
+  const explicitTestSelectedToys = Array.isArray(config?.testSelectedToys) ? config.testSelectedToys : null;
+  const hasLegacyLiveConfig = Boolean(
+    merged.scheme ||
+      merged.host ||
+      merged.port ||
+      merged.platformName ||
+      merged.toyId ||
+      merged.toyName ||
+      merged.toyType ||
+      (Array.isArray(merged.capabilities) && merged.capabilities.length),
+  );
+  const hasLegacyTestConfig = Boolean(
+    merged.testToyId ||
+      merged.testToyName ||
+      merged.testToyType ||
+      (Array.isArray(merged.testCapabilities) && merged.testCapabilities.length),
+  );
   const legacyConnection = {
     id: DEFAULT_LOVENSE_CONNECTION.id,
     label: DEFAULT_LOVENSE_CONNECTION.label,
-    scheme: merged.scheme,
-    host: merged.host,
-    port: merged.port,
-    platformName: merged.platformName,
+    scheme: merged.scheme || DEFAULT_LOVENSE_CONNECTION.scheme,
+    host: merged.host || DEFAULT_LOVENSE_CONNECTION.host,
+    port: merged.port || DEFAULT_LOVENSE_CONNECTION.port,
+    platformName: merged.platformName || DEFAULT_LOVENSE_CONNECTION.platformName,
     selectedToys:
       merged.toyId || merged.toyName || merged.toyType || merged.capabilities
         ? [
@@ -1623,7 +2059,12 @@ function normalizeLovenseConfig(config) {
           ]
         : [],
   };
-  const rawConnections = Array.isArray(merged.connections) && merged.connections.length ? merged.connections : [legacyConnection];
+  const rawConnections =
+    explicitConnections && explicitConnections.length
+      ? explicitConnections
+      : hasLegacyLiveConfig
+        ? [legacyConnection]
+        : DEFAULT_LOVENSE_CONFIG.connections;
   const connections = rawConnections.map((connection, index) => normalizeLovenseConnection(connection, index + 1));
   const selectedConnectionId =
     String(merged.selectedConnectionId || "").trim() && connections.some((connection) => connection.id === merged.selectedConnectionId)
@@ -1639,11 +2080,15 @@ function normalizeLovenseConfig(config) {
             toyName: merged.testToyName,
             toyType: merged.testToyType,
             capabilities: merged.testCapabilities,
-          }),
+            }),
         ].filter((toy) => toy.id)
       : [];
   const testSelectedToys = (
-    Array.isArray(merged.testSelectedToys) && merged.testSelectedToys.length ? merged.testSelectedToys : legacyTestToy
+    explicitTestSelectedToys && explicitTestSelectedToys.length
+      ? explicitTestSelectedToys
+      : hasLegacyTestConfig
+        ? legacyTestToy
+        : DEFAULT_LOVENSE_CONFIG.testSelectedToys
   )
     .map((toy) => normalizeToySelection(toy))
     .filter((toy) => toy.id);
