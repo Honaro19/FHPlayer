@@ -256,6 +256,11 @@ const state = {
       autoCheckEnabled: false,
       lastResult: null,
     },
+    ui: {
+      showDiagnostics: true,
+      showFunscriptOverview: true,
+      showExecutionLog: true,
+    },
   },
   diagnostics: {
     available: false,
@@ -301,11 +306,15 @@ const ui = {
   pendingCount: document.getElementById("pending-count"),
   libraryStatus: document.getElementById("library-status"),
   libraryPaths: document.getElementById("library-paths"),
+  showDiagnosticsToggle: document.getElementById("show-diagnostics-toggle"),
+  showFunscriptOverviewToggle: document.getElementById("show-funscript-overview-toggle"),
+  showExecutionLogToggle: document.getElementById("show-execution-log-toggle"),
   updateVersionLabel: document.getElementById("update-version-label"),
   updateAutoCheck: document.getElementById("update-auto-check"),
   checkUpdatesButton: document.getElementById("check-updates-button"),
   updateReleaseLink: document.getElementById("update-release-link"),
   updateStatus: document.getElementById("update-status"),
+  diagnosticsPanel: document.getElementById("diagnostics-panel"),
   diagnosticsStatus: document.getElementById("diagnostics-status"),
   diagnosticsPaths: document.getElementById("diagnostics-paths"),
   diagnosticsLog: document.getElementById("diagnostics-log"),
@@ -359,8 +368,10 @@ const ui = {
   clearLogButton: document.getElementById("clear-log-button"),
   playlistList: document.getElementById("playlist-list"),
   playlistSummary: document.getElementById("playlist-summary"),
+  scriptCard: document.getElementById("script-card"),
   scriptSummary: document.getElementById("script-summary"),
   actionTable: document.getElementById("action-table"),
+  logCard: document.getElementById("log-card"),
   log: document.getElementById("log"),
   logSummary: document.getElementById("log-summary"),
 };
@@ -375,6 +386,7 @@ async function init() {
   await refreshLibraryInfo();
   await loadDiagnosticsInfo();
   renderUpdateSettings();
+  renderSectionVisibilitySettings();
   if (state.backendCapabilities.updates && state.appSettings.updates.autoCheckEnabled) {
     await checkForUpdates({ automatic: true });
   }
@@ -430,6 +442,9 @@ function bindEvents() {
   ui.playlistMode.addEventListener("change", handlePlaybackModeChange);
   ui.playlistList.addEventListener("click", handlePlaylistListClick);
   ui.updateAutoCheck.addEventListener("change", handleUpdateAutoCheckChange);
+  ui.showDiagnosticsToggle.addEventListener("change", handleSectionVisibilityChange);
+  ui.showFunscriptOverviewToggle.addEventListener("change", handleSectionVisibilityChange);
+  ui.showExecutionLogToggle.addEventListener("change", handleSectionVisibilityChange);
   ui.checkUpdatesButton.addEventListener("click", () => checkForUpdates({ automatic: false }));
 
   ui.video.addEventListener("play", startSchedulerLoop);
@@ -463,11 +478,6 @@ async function checkBackend() {
 }
 
 async function loadAppSettings() {
-  if (!state.backendCapabilities.updates) {
-    renderUpdateSettings();
-    return;
-  }
-
   try {
     const response = await fetch("/api/settings", { cache: "no-store" });
     const data = await parseJsonResponse(response);
@@ -489,8 +499,11 @@ async function loadAppSettings() {
     state.appSettings = normalizeAppSettings({});
     renderUpdateStatus({
       status: "error",
-      message: `Could not load update settings: ${String(error)}`,
+      message: `Could not load app settings: ${String(error)}`,
     });
+  } finally {
+    renderUpdateSettings();
+    renderSectionVisibilitySettings();
   }
 }
 
@@ -500,7 +513,45 @@ function normalizeAppSettings(settings) {
       autoCheckEnabled: settings?.updates?.autoCheckEnabled === true,
       lastResult: normalizeUpdateResult(settings?.updates?.lastResult),
     },
+    ui: {
+      showDiagnostics: settings?.ui?.showDiagnostics !== false,
+      showFunscriptOverview: settings?.ui?.showFunscriptOverview !== false,
+      showExecutionLog: settings?.ui?.showExecutionLog !== false,
+    },
   };
+}
+
+function buildAppSettingsPayload() {
+  return {
+    updates: {
+      autoCheckEnabled: state.appSettings.updates.autoCheckEnabled,
+    },
+    ui: {
+      showDiagnostics: state.appSettings.ui.showDiagnostics,
+      showFunscriptOverview: state.appSettings.ui.showFunscriptOverview,
+      showExecutionLog: state.appSettings.ui.showExecutionLog,
+    },
+  };
+}
+
+async function persistAppSettings() {
+  const response = await fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(buildAppSettingsPayload()),
+  });
+  const data = await parseJsonResponse(response);
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+
+  state.currentVersion = String(data.currentVersion || state.currentVersion || "");
+  state.updateSupport = {
+    configured: data.updateSupport?.configured === true,
+    sourceUrl: String(data.updateSupport?.sourceUrl || state.updateSupport.sourceUrl || ""),
+  };
+  state.appSettings = normalizeAppSettings(data.settings);
+  return data;
 }
 
 function normalizeUpdateResult(result) {
@@ -589,33 +640,24 @@ function renderUpdateStatus(result) {
   }
 }
 
+function renderSectionVisibilitySettings() {
+  ui.showDiagnosticsToggle.checked = state.appSettings.ui.showDiagnostics;
+  ui.showFunscriptOverviewToggle.checked = state.appSettings.ui.showFunscriptOverview;
+  ui.showExecutionLogToggle.checked = state.appSettings.ui.showExecutionLog;
+  ui.diagnosticsPanel.classList.toggle("hidden", !state.appSettings.ui.showDiagnostics);
+  ui.scriptCard.classList.toggle("hidden", !state.appSettings.ui.showFunscriptOverview);
+  ui.logCard.classList.toggle("hidden", !state.appSettings.ui.showExecutionLog);
+}
+
 async function handleUpdateAutoCheckChange() {
   const previousValue = state.appSettings.updates.autoCheckEnabled;
   state.appSettings.updates.autoCheckEnabled = ui.updateAutoCheck.checked;
   renderUpdateSettings();
 
   try {
-    const response = await fetch("/api/settings", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        updates: {
-          autoCheckEnabled: state.appSettings.updates.autoCheckEnabled,
-        },
-      }),
-    });
-    const data = await parseJsonResponse(response);
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || `HTTP ${response.status}`);
-    }
-
-    state.currentVersion = String(data.currentVersion || state.currentVersion || "");
-    state.updateSupport = {
-      configured: data.updateSupport?.configured === true,
-      sourceUrl: String(data.updateSupport?.sourceUrl || state.updateSupport.sourceUrl || ""),
-    };
-    state.appSettings = normalizeAppSettings(data.settings);
+    await persistAppSettings();
     renderUpdateSettings();
+    renderSectionVisibilitySettings();
 
     if (state.appSettings.updates.autoCheckEnabled) {
       await checkForUpdates({ automatic: true });
@@ -627,6 +669,24 @@ async function handleUpdateAutoCheckChange() {
       status: "error",
       message: `Could not save update setting: ${String(error)}`,
     });
+  }
+}
+
+async function handleSectionVisibilityChange() {
+  const previousSettings = normalizeAppSettings(state.appSettings);
+  state.appSettings.ui.showDiagnostics = ui.showDiagnosticsToggle.checked;
+  state.appSettings.ui.showFunscriptOverview = ui.showFunscriptOverviewToggle.checked;
+  state.appSettings.ui.showExecutionLog = ui.showExecutionLogToggle.checked;
+  renderSectionVisibilitySettings();
+
+  try {
+    await persistAppSettings();
+    renderUpdateSettings();
+    renderSectionVisibilitySettings();
+  } catch (error) {
+    state.appSettings = previousSettings;
+    renderSectionVisibilitySettings();
+    appendLog({ ok: false, title: "Could not save panel visibility", detail: String(error) });
   }
 }
 

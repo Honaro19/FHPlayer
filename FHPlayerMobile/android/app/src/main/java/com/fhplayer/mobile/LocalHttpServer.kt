@@ -117,9 +117,17 @@ class LocalHttpServer(
 
     private fun normalizeSettings(payload: JSONObject?): JSONObject {
         val updates = payload?.optJSONObject("updates") ?: JSONObject()
+        val ui = payload?.optJSONObject("ui") ?: JSONObject()
         val normalizedUpdates = JSONObject().put("autoCheckEnabled", updates.optBoolean("autoCheckEnabled", false))
         normalizeUpdateResult(updates.opt("lastResult"))?.let { normalizedUpdates.put("lastResult", it) }
-        return JSONObject().put("updates", normalizedUpdates)
+        val normalizedUi =
+            JSONObject()
+                .put("showDiagnostics", ui.optBoolean("showDiagnostics", true))
+                .put("showFunscriptOverview", ui.optBoolean("showFunscriptOverview", true))
+                .put("showExecutionLog", ui.optBoolean("showExecutionLog", true))
+        return JSONObject()
+            .put("updates", normalizedUpdates)
+            .put("ui", normalizedUi)
     }
 
     private fun normalizeUpdateResult(value: Any?): JSONObject? {
@@ -496,8 +504,22 @@ class LocalHttpServer(
             val payload = parseJsonObject(request.body)
             val currentSettings = loadSettings()
             val updates = payload.optJSONObject("updates") ?: JSONObject()
-            currentSettings.optJSONObject("updates")
-                ?.put("autoCheckEnabled", updates.optBoolean("autoCheckEnabled", false))
+            if (updates.has("autoCheckEnabled")) {
+                currentSettings.optJSONObject("updates")
+                    ?.put("autoCheckEnabled", updates.optBoolean("autoCheckEnabled"))
+            }
+            val ui = payload.optJSONObject("ui") ?: JSONObject()
+            currentSettings.optJSONObject("ui")?.let { uiSettings ->
+                if (ui.has("showDiagnostics")) {
+                    uiSettings.put("showDiagnostics", ui.optBoolean("showDiagnostics"))
+                }
+                if (ui.has("showFunscriptOverview")) {
+                    uiSettings.put("showFunscriptOverview", ui.optBoolean("showFunscriptOverview"))
+                }
+                if (ui.has("showExecutionLog")) {
+                    uiSettings.put("showExecutionLog", ui.optBoolean("showExecutionLog"))
+                }
+            }
             val savedSettings = saveSettings(currentSettings)
             respondJson(
                 output,

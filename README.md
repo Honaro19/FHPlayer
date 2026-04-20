@@ -96,6 +96,14 @@ The update preference and the last result are stored locally:
 - Desktop: `%LOCALAPPDATA%\FHPlayer\settings.json`
 - Android: `fhplayer-settings.json` inside the app files directory
 
+The same settings file also stores which optional UI panels stay visible. You can hide or re-enable:
+
+- `Diagnostics`
+- `Funscript overview`
+- `Execution log`
+
+For a real end-to-end update test, publish the new version as a GitHub release first and let an older installed FHPlayer build use `Check now` against that release feed. That verifies the release detection path before you install the new installer or APK manually.
+
 ## Diagnostics
 
 FHPlayer now keeps a rotating local application log and exposes the most important diagnostic paths in the UI.

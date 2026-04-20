@@ -92,11 +92,17 @@ def normalize_update_result(result: Any) -> dict[str, Any] | None:
 
 def normalize_settings(payload: Any) -> dict[str, Any]:
     updates_payload = payload.get("updates", {}) if isinstance(payload, dict) else {}
+    ui_payload = payload.get("ui", {}) if isinstance(payload, dict) else {}
     return {
         "updates": {
             "autoCheckEnabled": bool(updates_payload.get("autoCheckEnabled", False)),
             "lastResult": normalize_update_result(updates_payload.get("lastResult")),
-        }
+        },
+        "ui": {
+            "showDiagnostics": bool(ui_payload.get("showDiagnostics", True)),
+            "showFunscriptOverview": bool(ui_payload.get("showFunscriptOverview", True)),
+            "showExecutionLog": bool(ui_payload.get("showExecutionLog", True)),
+        },
     }
 
 
@@ -720,7 +726,16 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
 
         current_settings = load_settings()
         updates_payload = payload.get("updates", {}) if isinstance(payload, dict) else {}
-        current_settings["updates"]["autoCheckEnabled"] = bool(updates_payload.get("autoCheckEnabled", False))
+        if isinstance(updates_payload, dict) and "autoCheckEnabled" in updates_payload:
+            current_settings["updates"]["autoCheckEnabled"] = bool(updates_payload.get("autoCheckEnabled"))
+        ui_payload = payload.get("ui", {}) if isinstance(payload, dict) else {}
+        if isinstance(ui_payload, dict):
+            if "showDiagnostics" in ui_payload:
+                current_settings["ui"]["showDiagnostics"] = bool(ui_payload.get("showDiagnostics"))
+            if "showFunscriptOverview" in ui_payload:
+                current_settings["ui"]["showFunscriptOverview"] = bool(ui_payload.get("showFunscriptOverview"))
+            if "showExecutionLog" in ui_payload:
+                current_settings["ui"]["showExecutionLog"] = bool(ui_payload.get("showExecutionLog"))
 
         try:
             saved_settings = save_settings(current_settings)

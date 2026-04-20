@@ -281,6 +281,27 @@ else stop()</textarea>
 
           <div class="config-block">
             <div class="section-head compact-head">
+              <h3>Visible panels</h3>
+              <span>Show only the sections you want to keep on screen.</span>
+            </div>
+            <div class="update-controls">
+              <label class="field toggle-row">
+                <span>Diagnostics</span>
+                <input id="show-diagnostics-toggle" type="checkbox" />
+              </label>
+              <label class="field toggle-row">
+                <span>Funscript overview</span>
+                <input id="show-funscript-overview-toggle" type="checkbox" />
+              </label>
+              <label class="field toggle-row">
+                <span>Execution log</span>
+                <input id="show-execution-log-toggle" type="checkbox" />
+              </label>
+            </div>
+          </div>
+
+          <div class="config-block">
+            <div class="section-head compact-head">
               <h3>Updates</h3>
               <span id="update-version-label">Version unknown</span>
             </div>
@@ -299,7 +320,7 @@ else stop()</textarea>
             </div>
           </div>
 
-          <div class="config-block">
+          <div id="diagnostics-panel" class="config-block">
             <div class="section-head compact-head">
               <h3>Diagnostics</h3>
               <span id="diagnostics-status">Loading diagnostics...</span>
@@ -340,7 +361,7 @@ else stop()</textarea>
           <div id="playlist-list" class="playlist-list"></div>
         </section>
 
-        <section class="card script-card">
+        <section id="script-card" class="card script-card">
           <div class="section-head">
             <h2>Funscript overview</h2>
             <span id="script-summary">No playlist entry loaded.</span>
@@ -359,7 +380,7 @@ else stop()</textarea>
           </div>
         </section>
 
-        <section class="card log-card">
+        <section id="log-card" class="card log-card">
           <div class="section-head">
             <h2>Execution log</h2>
             <span id="log-summary">No events yet.</span>

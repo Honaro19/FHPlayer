@@ -9,9 +9,13 @@ import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import android.webkit.ConsoleMessage
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebChromeClient.CustomViewCallback
 import android.webkit.WebView
@@ -36,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private var pendingFileChooserKind: String = "files"
     private var fullscreenView: View? = null
     private var fullscreenCallback: CustomViewCallback? = null
+    private var hasRetriedLocalLoad = false
     private val fileChooserLauncher: ActivityResultLauncher<Intent> =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             handleFileChooserResult(result.resultCode, result.data)
@@ -86,6 +91,54 @@ class MainActivity : ComponentActivity() {
         }
 
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                AppLogger.info(applicationContext, "WebView started loading ${url.orEmpty()}.")
+            }
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                super.onPageFinished(view, url)
+                AppLogger.info(applicationContext, "WebView finished loading ${url.orEmpty()}.")
+            }
+
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: WebResourceError,
+            ) {
+                super.onReceivedError(view, request, error)
+                if (!request.isForMainFrame) {
+                    return
+                }
+
+                val failedUrl = request.url?.toString().orEmpty()
+                AppLogger.error(
+                    applicationContext,
+                    "WebView main-frame load failed for $failedUrl: ${error.description} (${error.errorCode}).",
+                )
+
+                if (!hasRetriedLocalLoad && failedUrl.startsWith(LocalHttpServer.baseUrl())) {
+                    hasRetriedLocalLoad = true
+                    view.postDelayed({ loadHome() }, 300)
+                }
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                errorResponse: WebResourceResponse,
+            ) {
+                super.onReceivedHttpError(view, request, errorResponse)
+                if (!request.isForMainFrame) {
+                    return
+                }
+
+                AppLogger.error(
+                    applicationContext,
+                    "WebView main-frame HTTP error for ${request.url}: ${errorResponse.statusCode} ${errorResponse.reasonPhrase}.",
+                )
+            }
+
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
                 AppLogger.error(
                     applicationContext,
@@ -101,6 +154,26 @@ class MainActivity : ComponentActivity() {
             }
         }
         webView.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                val level =
+                    when (consoleMessage.messageLevel()) {
+                        ConsoleMessage.MessageLevel.ERROR -> "ERROR"
+                        ConsoleMessage.MessageLevel.WARNING -> "WARN"
+                        else -> "INFO"
+                    }
+                val source = consoleMessage.sourceId().orEmpty()
+                val lineNumber = consoleMessage.lineNumber()
+                val message = consoleMessage.message().orEmpty()
+
+                when (level) {
+                    "ERROR" -> AppLogger.error(applicationContext, "WebView console: $source:$lineNumber $message")
+                    "WARN" -> AppLogger.warn(applicationContext, "WebView console: $source:$lineNumber $message")
+                    else -> AppLogger.info(applicationContext, "WebView console: $source:$lineNumber $message")
+                }
+
+                return super.onConsoleMessage(consoleMessage)
+            }
+
             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                 showFullscreenView(view, callback)
             }
@@ -327,6 +400,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadHome() {
+        hasRetriedLocalLoad = false
         webView.loadUrl(LocalHttpServer.baseUrl())
     }
 
