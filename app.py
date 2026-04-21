@@ -102,6 +102,7 @@ def normalize_update_result(result: Any) -> dict[str, Any] | None:
 def normalize_settings(payload: Any) -> dict[str, Any]:
     updates_payload = payload.get("updates", {}) if isinstance(payload, dict) else {}
     ui_payload = payload.get("ui", {}) if isinstance(payload, dict) else {}
+    legal_payload = payload.get("legal", {}) if isinstance(payload, dict) else {}
     return {
         "updates": {
             "autoCheckEnabled": bool(updates_payload.get("autoCheckEnabled", False)),
@@ -111,6 +112,9 @@ def normalize_settings(payload: Any) -> dict[str, Any]:
             "showDiagnostics": bool(ui_payload.get("showDiagnostics", True)),
             "showFunscriptOverview": bool(ui_payload.get("showFunscriptOverview", True)),
             "showExecutionLog": bool(ui_payload.get("showExecutionLog", True)),
+        },
+        "legal": {
+            "lastAcknowledgedVersion": normalize_optional_string(legal_payload.get("lastAcknowledgedVersion")),
         },
     }
 
@@ -152,6 +156,22 @@ def parse_version_parts(version: str) -> tuple[int, int, int] | None:
     if not match:
         return None
     return tuple(int(part) for part in match.groups())
+
+
+def require_manifest_schema_version(payload: dict[str, Any]) -> None:
+    schema_version = payload.get("schema_version")
+    if isinstance(schema_version, bool):
+        raise ValueError("Update manifest schema_version must be 1")
+    if isinstance(schema_version, int):
+        normalized_schema_version = schema_version
+    else:
+        normalized_schema_value = normalize_optional_string(schema_version)
+        try:
+            normalized_schema_version = int(normalized_schema_value)
+        except (TypeError, ValueError):
+            normalized_schema_version = None
+    if normalized_schema_version != 1:
+        raise ValueError("Update manifest schema_version must be 1")
 
 
 def first_non_blank(*values: Any) -> str:
@@ -254,6 +274,7 @@ def parse_release_payload(payload: Any, platform: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Update feed returned an invalid JSON payload")
 
+    require_manifest_schema_version(payload)
     normalized_platform = normalize_update_platform(platform)
     platform_payload = extract_platform_payload(payload, normalized_platform)
     latest_version = first_non_blank(
@@ -868,6 +889,11 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
                 current_settings["ui"]["showFunscriptOverview"] = bool(ui_payload.get("showFunscriptOverview"))
             if "showExecutionLog" in ui_payload:
                 current_settings["ui"]["showExecutionLog"] = bool(ui_payload.get("showExecutionLog"))
+        legal_payload = payload.get("legal", {}) if isinstance(payload, dict) else {}
+        if isinstance(legal_payload, dict) and "lastAcknowledgedVersion" in legal_payload:
+            current_settings["legal"]["lastAcknowledgedVersion"] = normalize_optional_string(
+                legal_payload.get("lastAcknowledgedVersion")
+            )
 
         try:
             saved_settings = save_settings(current_settings)

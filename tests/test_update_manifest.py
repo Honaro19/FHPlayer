@@ -45,6 +45,35 @@ class UpdateManifestTests(unittest.TestCase):
             with self.subTest(field=key):
                 self.assertEqual(result[key], expected_value)
 
+    def test_parse_release_payload_rejects_missing_schema_version(self) -> None:
+        with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
+            app.parse_release_payload(
+                {
+                    "latest_version": "0.1.2",
+                    "platforms": {
+                        "windows": {
+                            "folder_url": "https://example.com/windows",
+                        }
+                    },
+                },
+                "desktop",
+            )
+
+    def test_parse_release_payload_rejects_wrong_schema_version(self) -> None:
+        with self.assertRaisesRegex(ValueError, "schema_version must be 1"):
+            app.parse_release_payload(
+                {
+                    "schema_version": 2,
+                    "latest_version": "0.1.2",
+                    "platforms": {
+                        "windows": {
+                            "folder_url": "https://example.com/windows",
+                        }
+                    },
+                },
+                "desktop",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

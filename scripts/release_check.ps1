@@ -151,6 +151,7 @@ $windowsReleaseBuildRoot = Join-Path $releaseCheckRoot "windows-release-build"
 $windowsReleaseTempRoot = Join-Path $releaseCheckRoot "windows-release-temp"
 $androidReleaseBuildDir = Join-Path $releaseCheckRoot "android-release-build\app"
 $androidReleaseOutputDir = Join-Path $releaseCheckRoot "android-release-output"
+$publicReleaseRoot = Join-Path $releaseCheckRoot "public-release\FHPlayer"
 $smokeRoot = Join-Path $releaseCheckRoot "smoke-tests"
 $summary = [System.Collections.Generic.List[string]]::new()
 
@@ -182,6 +183,7 @@ try {
       ".\FHPlayerMobile\android\install_debug_apk.ps1",
       ".\FHPlayerMobile\android\build_release_artifacts.ps1",
       ".\scripts\smoke_test.ps1",
+      ".\scripts\prepare_public_release.ps1",
       ".\scripts\test_rule_engine.ps1",
       ".\scripts\release_check.ps1"
     )
@@ -259,6 +261,35 @@ try {
     Assert-FileExists -Path $androidApkPath
     Assert-FileExists -Path $androidBundlePath
     $summary.Add("Android release artifacts: ok ($androidApkPath, $androidBundlePath)")
+  }
+
+  if (-not $SkipWindowsRelease -and -not $SkipAndroidRelease) {
+    Write-Step "Prepare and verify public release package"
+    $publicReleaseArguments = @(
+      "-ReleaseRoot", $publicReleaseRoot,
+      "-WindowsSetupPath", (Join-Path $windowsReleaseOutputDir "FHPlayer-$appVersion-Setup.exe"),
+      "-PortableSourceDir", (Join-Path $windowsReleaseBuildRoot "dist\FHPlayer"),
+      "-AndroidApkPath", (Join-Path $androidReleaseOutputDir "FHPlayer-$appVersion.apk"),
+      "-AndroidBundlePath", (Join-Path $androidReleaseOutputDir "FHPlayer-$appVersion.aab")
+    )
+
+    Invoke-CheckedCommand `
+      -FilePath (Join-Path $projectRoot "scripts\prepare_public_release.ps1") `
+      -Arguments $publicReleaseArguments `
+      -WorkingDirectory $projectRoot `
+      -Environment @{
+        FHPLAYER_NO_PAUSE = "1"
+      }
+
+    Invoke-CheckedCommand `
+      -FilePath (Join-Path $projectRoot "scripts\prepare_public_release.ps1") `
+      -Arguments ($publicReleaseArguments + "-VerifyOnly") `
+      -WorkingDirectory $projectRoot `
+      -Environment @{
+        FHPLAYER_NO_PAUSE = "1"
+      }
+
+    $summary.Add("Public release package: ok ($publicReleaseRoot)")
   }
 
   Write-Step "Release check summary"

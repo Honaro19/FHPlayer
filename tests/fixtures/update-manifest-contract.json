@@ -16,6 +16,7 @@
       "name": "platform_specific_folder_urls",
       "current_version": "0.1.1",
       "payload": {
+        "schema_version": 1,
         "app": "FHPlayer",
         "latest_version": "0.1.2",
         "platforms": {
@@ -52,6 +53,7 @@
       "name": "null_like_download_values",
       "current_version": "0.1.1",
       "payload": {
+        "schema_version": 1,
         "latest_version": "0.1.2",
         "platforms": {
           "android": {

@@ -227,6 +227,19 @@ const SIMULATED_TOYS = [
     fullFunctionNames: ["Vibrate", "Thrusting", "Suction"],
   },
 ];
+const UPDATE_CHECK_DISCLOSURE = "The update check downloads a version file from an external Google Drive location.";
+const LEGAL_NOTICE_HTML = `
+  <p>The software is provided "as is", without warranty of any kind.</p>
+  <p>Use of this software is at your own risk.</p>
+  <p>The author is not liable for damages, especially:</p>
+  <ul>
+    <li>data loss</li>
+    <li>system failures</li>
+    <li>consequential damages</li>
+  </ul>
+  <p>Liability for intent and gross negligence remains unaffected where required by applicable law.</p>
+  <p>This software is a private project and is not intended for production use.</p>
+`;
 
 const state = {
   playlist: [],
@@ -260,6 +273,9 @@ const state = {
       showDiagnostics: true,
       showFunscriptOverview: true,
       showExecutionLog: true,
+    },
+    legal: {
+      lastAcknowledgedVersion: "",
     },
   },
   diagnostics: {
@@ -296,6 +312,7 @@ const state = {
   formLovense: normalizeLovenseConfig(DEFAULT_LOVENSE_CONFIG),
   scheduledLovenseTimers: new Set(),
   lovenseAutoStopTimers: new Map(),
+  legalNoticePromiseResolver: null,
 };
 
 const ui = {
@@ -314,6 +331,10 @@ const ui = {
   checkUpdatesButton: document.getElementById("check-updates-button"),
   updateReleaseLink: document.getElementById("update-release-link"),
   updateStatus: document.getElementById("update-status"),
+  legalNoticeModal: document.getElementById("legal-notice-modal"),
+  legalNoticeBody: document.getElementById("legal-notice-body"),
+  legalNoticeStatus: document.getElementById("legal-notice-status"),
+  legalNoticeAcknowledgeButton: document.getElementById("legal-notice-acknowledge-button"),
   diagnosticsPanel: document.getElementById("diagnostics-panel"),
   diagnosticsStatus: document.getElementById("diagnostics-status"),
   diagnosticsPaths: document.getElementById("diagnostics-paths"),
@@ -387,6 +408,7 @@ async function init() {
   await loadDiagnosticsInfo();
   renderUpdateSettings();
   renderSectionVisibilitySettings();
+  await ensureLegalNoticeAcknowledged();
   if (state.backendCapabilities.updates && state.appSettings.updates.autoCheckEnabled) {
     await checkForUpdates({ automatic: true });
   }
@@ -446,6 +468,7 @@ function bindEvents() {
   ui.showFunscriptOverviewToggle.addEventListener("change", handleSectionVisibilityChange);
   ui.showExecutionLogToggle.addEventListener("change", handleSectionVisibilityChange);
   ui.checkUpdatesButton.addEventListener("click", () => checkForUpdates({ automatic: false }));
+  ui.legalNoticeAcknowledgeButton.addEventListener("click", acknowledgeLegalNotice);
 
   ui.video.addEventListener("play", startSchedulerLoop);
   ui.video.addEventListener("pause", handleVideoPause);
@@ -518,6 +541,9 @@ function normalizeAppSettings(settings) {
       showFunscriptOverview: settings?.ui?.showFunscriptOverview !== false,
       showExecutionLog: settings?.ui?.showExecutionLog !== false,
     },
+    legal: {
+      lastAcknowledgedVersion: String(settings?.legal?.lastAcknowledgedVersion || ""),
+    },
   };
 }
 
@@ -530,6 +556,9 @@ function buildAppSettingsPayload() {
       showDiagnostics: state.appSettings.ui.showDiagnostics,
       showFunscriptOverview: state.appSettings.ui.showFunscriptOverview,
       showExecutionLog: state.appSettings.ui.showExecutionLog,
+    },
+    legal: {
+      lastAcknowledgedVersion: state.appSettings.legal.lastAcknowledgedVersion,
     },
   };
 }
@@ -640,6 +669,68 @@ function renderUpdateStatus(result) {
   }
 }
 
+function shouldShowLegalNotice() {
+  return Boolean(state.currentVersion) && state.appSettings.legal.lastAcknowledgedVersion !== state.currentVersion;
+}
+
+function renderLegalNoticeDialog(visible, errorMessage = "") {
+  if (!ui.legalNoticeModal || !ui.legalNoticeBody || !ui.legalNoticeStatus || !ui.legalNoticeAcknowledgeButton) {
+    return;
+  }
+
+  ui.legalNoticeBody.innerHTML = LEGAL_NOTICE_HTML;
+  ui.legalNoticeModal.classList.toggle("hidden", !visible);
+  document.body.classList.toggle("modal-open", visible);
+  ui.legalNoticeAcknowledgeButton.disabled = false;
+
+  if (visible && errorMessage) {
+    ui.legalNoticeStatus.className = "status-note error";
+    ui.legalNoticeStatus.textContent = errorMessage;
+    ui.legalNoticeStatus.classList.remove("hidden");
+  } else {
+    ui.legalNoticeStatus.className = "status-note hidden";
+    ui.legalNoticeStatus.textContent = "";
+    ui.legalNoticeStatus.classList.add("hidden");
+  }
+}
+
+async function ensureLegalNoticeAcknowledged() {
+  if (!shouldShowLegalNotice()) {
+    renderLegalNoticeDialog(false);
+    return;
+  }
+
+  renderLegalNoticeDialog(true);
+  await new Promise((resolve) => {
+    state.legalNoticePromiseResolver = resolve;
+  });
+}
+
+async function acknowledgeLegalNotice() {
+  if (!shouldShowLegalNotice()) {
+    renderLegalNoticeDialog(false);
+    if (state.legalNoticePromiseResolver) {
+      state.legalNoticePromiseResolver();
+      state.legalNoticePromiseResolver = null;
+    }
+    return;
+  }
+
+  ui.legalNoticeAcknowledgeButton.disabled = true;
+  state.appSettings.legal.lastAcknowledgedVersion = state.currentVersion;
+  try {
+    await persistAppSettings();
+    renderLegalNoticeDialog(false);
+    if (state.legalNoticePromiseResolver) {
+      state.legalNoticePromiseResolver();
+      state.legalNoticePromiseResolver = null;
+    }
+  } catch (error) {
+    state.appSettings.legal.lastAcknowledgedVersion = "";
+    renderLegalNoticeDialog(true, `Could not save the acknowledgement: ${String(error)}`);
+  }
+}
+
 function renderSectionVisibilitySettings() {
   ui.showDiagnosticsToggle.checked = state.appSettings.ui.showDiagnostics;
   ui.showFunscriptOverviewToggle.checked = state.appSettings.ui.showFunscriptOverview;
@@ -696,6 +787,10 @@ async function checkForUpdates({ automatic = false } = {}) {
   }
 
   ui.checkUpdatesButton.disabled = true;
+  renderUpdateStatus({
+    status: "muted",
+    message: `${UPDATE_CHECK_DISCLOSURE}\nChecking for updates now...`,
+  });
   try {
     const response = await fetch("/api/update/check", {
       method: "POST",

@@ -3,6 +3,7 @@ FHPlayer 0.1.1 for Android
 Contents:
 - FHPlayer-0.1.1.apk: installable Android release package
 - FHPlayer-0.1.1.aab: Android App Bundle archive
+- LICENSE.txt: license and disclaimer
 - CHANGELOG.txt: release summary
 - SHA256SUMS.txt: checksums for the public files
 
@@ -13,3 +14,4 @@ Installation:
 Notes:
 - On first start FHPlayer creates its managed Library folders inside the app storage area.
 - Automatic update checks use the shared FHPlayer manifest and open the public Android release folder.
+- FHPlayer is a private project and is not intended for production use.

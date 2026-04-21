@@ -118,6 +118,7 @@ class LocalHttpServer(
     private fun normalizeSettings(payload: JSONObject?): JSONObject {
         val updates = payload?.optJSONObject("updates") ?: JSONObject()
         val ui = payload?.optJSONObject("ui") ?: JSONObject()
+        val legal = payload?.optJSONObject("legal") ?: JSONObject()
         val normalizedUpdates = JSONObject().put("autoCheckEnabled", updates.optBoolean("autoCheckEnabled", false))
         normalizeUpdateResult(updates.opt("lastResult"))?.let { normalizedUpdates.put("lastResult", it) }
         val normalizedUi =
@@ -125,9 +126,16 @@ class LocalHttpServer(
                 .put("showDiagnostics", ui.optBoolean("showDiagnostics", true))
                 .put("showFunscriptOverview", ui.optBoolean("showFunscriptOverview", true))
                 .put("showExecutionLog", ui.optBoolean("showExecutionLog", true))
+        val normalizedLegal =
+            JSONObject()
+                .put(
+                    "lastAcknowledgedVersion",
+                    UpdateManifestParser.normalizeOptionalString(legal.opt("lastAcknowledgedVersion")),
+                )
         return JSONObject()
             .put("updates", normalizedUpdates)
             .put("ui", normalizedUi)
+            .put("legal", normalizedLegal)
     }
 
     private fun normalizeUpdateResult(value: Any?): JSONObject? {
@@ -518,6 +526,15 @@ class LocalHttpServer(
                 }
                 if (ui.has("showExecutionLog")) {
                     uiSettings.put("showExecutionLog", ui.optBoolean("showExecutionLog"))
+                }
+            }
+            val legal = payload.optJSONObject("legal") ?: JSONObject()
+            currentSettings.optJSONObject("legal")?.let { legalSettings ->
+                if (legal.has("lastAcknowledgedVersion")) {
+                    legalSettings.put(
+                        "lastAcknowledgedVersion",
+                        UpdateManifestParser.normalizeOptionalString(legal.opt("lastAcknowledgedVersion")),
+                    )
                 }
             }
             val savedSettings = saveSettings(currentSettings)

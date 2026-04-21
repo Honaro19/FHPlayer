@@ -4,6 +4,7 @@ import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class UpdateManifestParserTest {
@@ -50,5 +51,58 @@ class UpdateManifestParserTest {
                 assertTrue(result.getString("message").isNotBlank(), "${case.getString("name")} [$platform] message")
             }
         }
+    }
+
+    @Test
+    fun `parse release payload rejects missing schema version`() {
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                UpdateManifestParser.parseReleasePayload(
+                    JSONObject(
+                        """
+                        {
+                          "latest_version": "0.1.2",
+                          "platforms": {
+                            "windows": {
+                              "folder_url": "https://example.com/windows"
+                            }
+                          }
+                        }
+                        """.trimIndent(),
+                    ),
+                    "desktop",
+                    "0.1.1",
+                    "2026-04-20T20:31:54Z",
+                )
+            }
+
+        assertTrue(error.message.orEmpty().contains("schema_version must be 1"))
+    }
+
+    @Test
+    fun `parse release payload rejects wrong schema version`() {
+        val error =
+            assertFailsWith<IllegalArgumentException> {
+                UpdateManifestParser.parseReleasePayload(
+                    JSONObject(
+                        """
+                        {
+                          "schema_version": 2,
+                          "latest_version": "0.1.2",
+                          "platforms": {
+                            "windows": {
+                              "folder_url": "https://example.com/windows"
+                            }
+                          }
+                        }
+                        """.trimIndent(),
+                    ),
+                    "desktop",
+                    "0.1.1",
+                    "2026-04-20T20:31:54Z",
+                )
+            }
+
+        assertTrue(error.message.orEmpty().contains("schema_version must be 1"))
     }
 }

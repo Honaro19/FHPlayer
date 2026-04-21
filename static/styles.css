@@ -27,6 +27,10 @@ body {
   color: var(--text);
 }
 
+body.modal-open {
+  overflow: hidden;
+}
+
 code {
   font-family: "Consolas", "Courier New", monospace;
 }
@@ -204,6 +208,43 @@ textarea {
 
 .hidden {
   display: none;
+}
+
+.modal-shell {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(29, 20, 12, 0.62);
+  backdrop-filter: blur(8px);
+}
+
+.modal-card {
+  width: min(720px, 100%);
+  padding: 22px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.modal-copy {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.modal-copy p,
+.modal-copy ul {
+  margin: 0;
+}
+
+.modal-copy ul {
+  padding-left: 20px;
 }
 
 video {

@@ -1,4 +1,5 @@
 {
+    "schema_version":  1,
     "app":  "FHPlayer",
     "latest_version":  "0.1.1",
     "release_notes":  [
@@ -21,8 +22,8 @@
                                       "apk_url":  null,
                                       "aab_url":  null,
                                       "sha256":  {
-                                                     "apk":  "9210957daa3380baf46de4ffcb50681953de4300629e8850239baf676b72b6ec",
-                                                     "aab":  "231e51815f1249856482b00eba1c66091d00cc4befb000acb7e3fbb40c311295"
+                                                     "apk":  "61961101b9659fdca818860a9ad3b309daca710e39e549571cb751cf2d4a5244",
+                                                     "aab":  "a64b28a1a312ce37895b0c618f1ec20b15354fafe2703fd66a738a01d3482083"
                                                  }
                                   }
                   }

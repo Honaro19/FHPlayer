@@ -40,6 +40,7 @@ Recommended schema:
 
 ```json
 {
+  "schema_version": 1,
   "app": "FHPlayer",
   "latest_version": "0.0.0",
   "release_notes": [
@@ -63,6 +64,7 @@ Recommended schema:
 
 The app uses:
 
+- `schema_version` to validate that the manifest matches the expected contract
 - `latest_version` to compare versions
 - `platforms.windows.folder_url` or `platforms.android.folder_url` as the release destination opened by the UI
 - optional direct file URLs only as additional metadata

@@ -45,6 +45,7 @@ internal object UpdateManifestParser {
     }
 
     fun parseReleasePayload(payload: JSONObject, platform: String, currentVersion: String, checkedAt: String = Instant.now().toString()): JSONObject {
+        requireManifestSchemaVersion(payload)
         val normalizedPlatform = normalizeUpdatePlatform(platform)
         val platformPayload = extractPlatformPayload(payload, normalizedPlatform)
         val latestVersionRaw =
@@ -110,6 +111,19 @@ internal object UpdateManifestParser {
                     "You are already on the latest version ($currentVersion)."
                 },
             )
+    }
+
+    private fun requireManifestSchemaVersion(payload: JSONObject) {
+        val schemaVersionValue = payload.opt("schema_version")
+        val schemaVersion =
+            when (schemaVersionValue) {
+                null, JSONObject.NULL -> null
+                is Number -> schemaVersionValue.toInt()
+                is String -> schemaVersionValue.trim().toIntOrNull()
+                is Boolean -> null
+                else -> schemaVersionValue.toString().trim().toIntOrNull()
+            }
+        require(schemaVersion == 1) { "Update manifest schema_version must be 1" }
     }
 
     private fun parseVersionParts(version: String): List<Int>? {

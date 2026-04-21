@@ -192,6 +192,7 @@ FHPlayer $AppVersion for Windows
 Contents:
 - ${SetupFileName}: per-user Windows installer
 - ${PortableFileName}: portable bundle without installer
+- LICENSE.txt: license and disclaimer
 - CHANGELOG.txt: release summary
 - SHA256SUMS.txt: checksums for the public files
 
@@ -202,6 +203,7 @@ Installation:
 Notes:
 - The installer and the portable bundle contain FHPlayer ${AppVersion}.
 - Automatic update checks use the shared FHPlayer manifest and open the public Windows release folder.
+- FHPlayer is a private project and is not intended for production use.
 "@
 }
 
@@ -218,6 +220,7 @@ FHPlayer $AppVersion for Android
 Contents:
 - ${ApkFileName}: installable Android release package
 - ${BundleFileName}: Android App Bundle archive
+- LICENSE.txt: license and disclaimer
 - CHANGELOG.txt: release summary
 - SHA256SUMS.txt: checksums for the public files
 
@@ -228,6 +231,7 @@ Installation:
 Notes:
 - On first start FHPlayer creates its managed Library folders inside the app storage area.
 - Automatic update checks use the shared FHPlayer manifest and open the public Android release folder.
+- FHPlayer is a private project and is not intended for production use.
 "@
 }
 
@@ -366,6 +370,11 @@ function Assert-PublicReleaseOutputs {
     throw "Manifest $ManifestPath must contain app = FHPlayer"
   }
 
+  $schemaVersion = "$($manifest.schema_version)".Trim()
+  if ($schemaVersion -ne "1") {
+    throw "Manifest $ManifestPath must contain schema_version = 1"
+  }
+
   if ("$($manifest.latest_version)".Trim() -ne $AppVersion) {
     throw "Manifest $ManifestPath must contain latest_version = $AppVersion"
   }
@@ -383,6 +392,8 @@ function Assert-PublicReleaseOutputs {
   $androidReadmePath = Join-Path $AndroidVersionDirectory "README.txt"
   $androidChangelogPath = Join-Path $AndroidVersionDirectory "CHANGELOG.txt"
   $androidShaPath = Join-Path $AndroidVersionDirectory "SHA256SUMS.txt"
+  $windowsLicensePath = Join-Path $WindowsVersionDirectory "LICENSE.txt"
+  $androidLicensePath = Join-Path $AndroidVersionDirectory "LICENSE.txt"
   $publicWindowsSetupPath = Join-Path $WindowsVersionDirectory $WindowsSetupFileName
   $publicWindowsPortablePath = Join-Path $WindowsVersionDirectory $WindowsPortableFileName
   $publicAndroidApkPath = Join-Path $AndroidVersionDirectory $AndroidApkFileName
@@ -392,9 +403,11 @@ function Assert-PublicReleaseOutputs {
     $windowsReadmePath,
     $windowsChangelogPath,
     $windowsShaPath,
+    $windowsLicensePath,
     $androidReadmePath,
     $androidChangelogPath,
     $androidShaPath,
+    $androidLicensePath,
     $publicWindowsSetupPath,
     $publicWindowsPortablePath,
     $publicAndroidApkPath,
@@ -452,6 +465,12 @@ function Assert-PublicReleaseOutputs {
   foreach ($requiredSnippet in @("FHPlayer $AppVersion", $AndroidApkFileName, $AndroidBundleFileName)) {
     if ($androidReadme -notlike "*$requiredSnippet*") {
       throw "Android README is missing '$requiredSnippet'"
+    }
+  }
+  foreach ($licensePath in @($windowsLicensePath, $androidLicensePath)) {
+    $licenseText = Get-Content -LiteralPath $licensePath -Raw
+    if ($licenseText -notlike "*MIT License*") {
+      throw "License file $licensePath does not contain the MIT License heading"
     }
   }
   if ($windowsChangelog -notlike "*FHPlayer $AppVersion*") {
@@ -533,6 +552,10 @@ $resolvedManifestPath = if ($ManifestPath) {
 $templatePath = Join-Path $projectRoot "release\update_manifest.template.json"
 if (-not (Test-Path $templatePath)) {
   throw "Missing manifest template at $templatePath"
+}
+$licensePath = Join-Path $projectRoot "LICENSE"
+if (-not (Test-Path $licensePath)) {
+  throw "Missing LICENSE file at $licensePath"
 }
 
 $manifestTemplate = Read-JsonFile -Path $templatePath
@@ -644,6 +667,8 @@ $androidBundleHash = Get-HashText -Path $publicAndroidBundlePath
 
 Write-Utf8File -Path (Join-Path $windowsVersionDirectory "README.txt") -Content (Build-WindowsReadme -AppVersion $appVersion -SetupFileName $windowsSetupFileName -PortableFileName $windowsPortableFileName)
 Write-Utf8File -Path (Join-Path $androidVersionDirectory "README.txt") -Content (Build-AndroidReadme -AppVersion $appVersion -ApkFileName $androidApkFileName -BundleFileName $androidBundleFileName)
+Copy-Item -LiteralPath $licensePath -Destination (Join-Path $windowsVersionDirectory "LICENSE.txt") -Force
+Copy-Item -LiteralPath $licensePath -Destination (Join-Path $androidVersionDirectory "LICENSE.txt") -Force
 
 $changelogText = Build-Changelog -AppVersion $appVersion -ReleaseNotes $releaseNotes
 Write-Utf8File -Path (Join-Path $windowsVersionDirectory "CHANGELOG.txt") -Content $changelogText
@@ -672,6 +697,7 @@ $androidTemplate = if ($existingManifest -and $existingManifest.platforms -and $
 }
 
 $manifestObject = [ordered]@{
+  schema_version = 1
   app = "FHPlayer"
   latest_version = $appVersion
   release_notes = @($releaseNotes)
