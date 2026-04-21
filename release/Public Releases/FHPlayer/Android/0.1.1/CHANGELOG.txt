@@ -1,0 +1,5 @@
+FHPlayer 0.1.1
+
+- Added UI visibility settings for diagnostics, the funscript overview, and the execution log.
+- Added rotating application logs and release build flows for Windows and Android.
+- Consolidated release tooling, smoke tests, and manifest-based update delivery.

@@ -1,0 +1,29 @@
+{
+  "app": "FHPlayer",
+  "latest_version": "<version>",
+  "release_notes": [
+    "<short change 1>",
+    "<short change 2>",
+    "<short change 3>"
+  ],
+  "platforms": {
+    "windows": {
+      "folder_url": "https://drive.google.com/drive/folders/1jm1sMNGEvUAdXWNPiGaqRJ5pKo6IDZQW?usp=sharing",
+      "installer_url": null,
+      "portable_url": null,
+      "sha256": {
+        "installer": "<sha256 or null>",
+        "portable": "<sha256 or null>"
+      }
+    },
+    "android": {
+      "folder_url": "https://drive.google.com/drive/folders/1iMRmAQ2dd2zzCSV8IXSWNE-bn_L7oNte?usp=sharing",
+      "apk_url": null,
+      "aab_url": null,
+      "sha256": {
+        "apk": "<sha256 or null>",
+        "aab": "<sha256 or null>"
+      }
+    }
+  }
+}

@@ -76,18 +76,25 @@ FHPlayer now includes an optional update check in the UI:
 
 - `Check automatically on startup` is off by default and can be enabled or disabled by the user at any time
 - `Check now` always remains available for a manual check
-- The desktop and Android app both compare the current version against the latest GitHub release of `Honaro19/FHPlayer`
+- The desktop and Android app both compare the current version against a shared Google Drive manifest for FHPlayer
 
 By default the app checks:
 
 ```text
-https://api.github.com/repos/Honaro19/FHPlayer/releases/latest
+https://drive.google.com/file/d/1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV/view?usp=sharing
 ```
 
-On desktop you can override that feed URL for testing or custom hosting:
+Internally FHPlayer converts that public Google Drive file link into the raw download endpoint before it parses the JSON manifest.
+
+The manifest is shared between Windows and Android. The UI opens the platform-specific public folder link from the manifest:
+
+- Windows: `https://drive.google.com/drive/folders/1jm1sMNGEvUAdXWNPiGaqRJ5pKo6IDZQW?usp=sharing`
+- Android: `https://drive.google.com/drive/folders/1iMRmAQ2dd2zzCSV8IXSWNE-bn_L7oNte?usp=sharing`
+
+On desktop you can still override that feed URL for testing or custom hosting:
 
 ```powershell
-$env:FHPLAYER_UPDATE_FEED_URL = "https://example.com/releases/latest.json"
+$env:FHPLAYER_UPDATE_FEED_URL = "https://example.com/update_manifest.json"
 python app.py
 ```
 
@@ -102,7 +109,12 @@ The same settings file also stores which optional UI panels stay visible. You ca
 - `Funscript overview`
 - `Execution log`
 
-For a real end-to-end update test, publish the new version as a GitHub release first and let an older installed FHPlayer build use `Check now` against that release feed. That verifies the release detection path before you install the new installer or APK manually.
+For a real end-to-end update test, replace the existing manifest content in Google Drive with the next release JSON and let an older installed FHPlayer build use `Check now`. That verifies the real manifest-based update path before you distribute the new installer or APK.
+
+The release workflow and the local manifest template are documented in:
+
+- `release/RELEASE_PROCESS.md`
+- `release/update_manifest.template.json`
 
 ## Diagnostics
 
@@ -249,6 +261,28 @@ Or through environment variables:
 - `FHPLAYER_WINDOWS_SIGN_CERT_THUMBPRINT`
 - `FHPLAYER_WINDOWS_SIGNTOOL_PATH`
 - `FHPLAYER_WINDOWS_SIGN_TIMESTAMP_URL`
+
+To prepare the public Google Drive release folder from the built artifacts, run:
+
+```powershell
+.\scripts\prepare_public_release.ps1
+```
+
+That populates:
+
+```text
+release\Public Releases\FHPlayer\
+```
+
+It creates the versioned Windows and Android folders, builds the portable Windows ZIP, writes `README.txt`, `CHANGELOG.txt`, `SHA256SUMS.txt`, and refreshes `update_manifest.json`.
+
+Useful options:
+
+- `-DryRun` to validate all inputs and show the planned output paths without writing files
+- `-VerifyOnly` to validate an already prepared public release folder, manifest, and checksums
+- `-ReleaseNote "..."` to override the release notes directly from the command line
+- `-ReleaseNotesPath .\path\to\notes.txt` to load release notes from a text file
+- `-CleanVersionDirectories` to rebuild the versioned Windows and Android output folders from scratch
 
 ## Mobile Version
 

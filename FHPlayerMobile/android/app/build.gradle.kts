@@ -16,6 +16,11 @@ val appVersionMatch = Regex("""^(\d+)\.(\d+)\.(\d+)$""").matchEntire(appVersion)
 val appVersionCode = appVersionMatch.destructured.let { (major, minor, patch) ->
     major.toInt() * 10000 + minor.toInt() * 100 + patch.toInt()
 }
+val defaultUpdateFeedUrl = "https://drive.google.com/file/d/1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV/view?usp=sharing"
+val updateFeedUrl =
+    providers.gradleProperty("fhplayerUpdateFeedUrl").orNull?.trim()?.takeIf { it.isNotBlank() }
+        ?: providers.environmentVariable("FHPLAYER_UPDATE_FEED_URL").orNull?.trim()?.takeIf { it.isNotBlank() }
+        ?: defaultUpdateFeedUrl
 
 providers.gradleProperty("fhplayerBuildDir").orNull?.takeIf { it.isNotBlank() }?.let { buildDirOverride ->
     layout.buildDirectory.set(file(buildDirOverride))
@@ -80,6 +85,7 @@ android {
         targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersion
+        buildConfigField("String", "FHPLAYER_UPDATE_FEED_URL", "\"${updateFeedUrl.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
     }
 
     buildTypes {
@@ -115,6 +121,9 @@ android {
         getByName("main") {
             assets.srcDir(layout.buildDirectory.dir("generated/fhplayer-assets"))
         }
+        getByName("test") {
+            resources.srcDir(layout.projectDirectory.dir("../../../tests/fixtures"))
+        }
     }
 }
 
@@ -131,4 +140,6 @@ tasks.named("preBuild").configure {
 dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
     implementation(kotlin("stdlib"))
+    testImplementation("org.json:json:20240303")
+    testImplementation(kotlin("test"))
 }

@@ -24,8 +24,10 @@ HOST = "127.0.0.1"
 PORT = 8765
 BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC_DIR = BASE_DIR / "static"
-UPDATE_FEED_URL = os.environ.get("FHPLAYER_UPDATE_FEED_URL", "https://api.github.com/repos/Honaro19/FHPlayer/releases/latest")
+DEFAULT_UPDATE_FEED_URL = "https://drive.google.com/file/d/1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV/view?usp=sharing"
+UPDATE_FEED_URL = os.environ.get("FHPLAYER_UPDATE_FEED_URL", DEFAULT_UPDATE_FEED_URL)
 VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
+GOOGLE_DRIVE_FILE_PATH_PATTERN = re.compile(r"^/file/d/([A-Za-z0-9_-]+)(?:/|$)")
 
 
 def read_app_version() -> str:
@@ -72,21 +74,28 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def normalize_optional_string(value: Any) -> str:
+    normalized = str(value or "").strip()
+    if normalized.lower() in {"", "null", "none"}:
+        return ""
+    return normalized
+
+
 def normalize_update_result(result: Any) -> dict[str, Any] | None:
     if not isinstance(result, dict):
         return None
 
     return {
-        "status": str(result.get("status", "")).strip() or "unknown",
-        "checkedAt": str(result.get("checkedAt", "")).strip(),
-        "currentVersion": str(result.get("currentVersion", "")).strip() or APP_VERSION,
-        "latestVersion": str(result.get("latestVersion", "")).strip(),
+        "status": normalize_optional_string(result.get("status")) or "unknown",
+        "checkedAt": normalize_optional_string(result.get("checkedAt")),
+        "currentVersion": normalize_optional_string(result.get("currentVersion")) or APP_VERSION,
+        "latestVersion": normalize_optional_string(result.get("latestVersion")),
         "updateAvailable": bool(result.get("updateAvailable", False)),
-        "releaseUrl": str(result.get("releaseUrl", "")).strip(),
-        "downloadUrl": str(result.get("downloadUrl", "")).strip(),
-        "assetName": str(result.get("assetName", "")).strip(),
-        "publishedAt": str(result.get("publishedAt", "")).strip(),
-        "message": str(result.get("message", "")).strip(),
+        "releaseUrl": normalize_optional_string(result.get("releaseUrl")),
+        "downloadUrl": normalize_optional_string(result.get("downloadUrl")),
+        "assetName": normalize_optional_string(result.get("assetName")),
+        "publishedAt": normalize_optional_string(result.get("publishedAt")),
+        "message": normalize_optional_string(result.get("message")),
     }
 
 
@@ -145,15 +154,91 @@ def parse_version_parts(version: str) -> tuple[int, int, int] | None:
     return tuple(int(part) for part in match.groups())
 
 
+def first_non_blank(*values: Any) -> str:
+    for value in values:
+        normalized = normalize_optional_string(value)
+        if normalized:
+            return normalized
+    return ""
+
+
+def normalize_update_platform(platform: str) -> str:
+    normalized_platform = str(platform or "").strip().lower()
+    if normalized_platform in {"android"}:
+        return "android"
+    return "windows"
+
+
+def get_string_value(payload: Any, *keys: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        normalized = normalize_optional_string(value)
+        if normalized:
+            return normalized
+    return ""
+
+
+def extract_platform_payload(payload: dict[str, Any], platform: str) -> dict[str, Any]:
+    platform_payload = payload.get("platforms")
+    if isinstance(platform_payload, dict):
+        selected_payload = platform_payload.get(platform)
+        if isinstance(selected_payload, dict):
+            return selected_payload
+
+    selected_payload = payload.get(platform)
+    if isinstance(selected_payload, dict):
+        return selected_payload
+
+    return {}
+
+
+def asset_name_from_url(url: str) -> str:
+    path = urlparse(str(url or "").strip()).path.rstrip("/")
+    if not path:
+        return ""
+    return path.split("/")[-1]
+
+
+def resolve_update_feed_request_url(source_url: str) -> str:
+    normalized_source_url = str(source_url or "").strip()
+    if not normalized_source_url:
+        return ""
+
+    parsed = urlparse(normalized_source_url)
+    if parsed.netloc not in {"drive.google.com", "www.drive.google.com"}:
+        return normalized_source_url
+
+    match = GOOGLE_DRIVE_FILE_PATH_PATTERN.match(parsed.path)
+    if match:
+        return f"https://drive.google.com/uc?export=download&id={match.group(1)}"
+
+    query = parse_qs(parsed.query)
+    file_id = first_non_blank(*(query.get("id") or []))
+    if file_id:
+        return f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    return normalized_source_url
+
+
 def select_release_asset(assets: Any, platform: str) -> tuple[str, str]:
     if not isinstance(assets, list):
         return "", ""
 
-    preferred_suffixes = [".apk", ".aab"] if platform == "android" else [".exe"]
+    preferred_suffixes = [".apk", ".aab"] if normalize_update_platform(platform) == "android" else [".exe", ".zip"]
     normalized_assets = [
         {
             "name": str(asset.get("name", "")).strip(),
-            "downloadUrl": str(asset.get("browser_download_url", asset.get("downloadUrl", ""))).strip(),
+            "downloadUrl": first_non_blank(
+                asset.get("browser_download_url"),
+                asset.get("downloadUrl"),
+                asset.get("download_url"),
+                asset.get("url"),
+            ),
         }
         for asset in assets
         if isinstance(asset, dict)
@@ -169,17 +254,39 @@ def parse_release_payload(payload: Any, platform: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Update feed returned an invalid JSON payload")
 
-    latest_version = str(payload.get("version") or payload.get("latestVersion") or payload.get("tag_name") or payload.get("name") or "").strip()
+    normalized_platform = normalize_update_platform(platform)
+    platform_payload = extract_platform_payload(payload, normalized_platform)
+    latest_version = first_non_blank(
+        get_string_value(platform_payload, "latest_version", "latestVersion", "version", "tag_name", "name"),
+        get_string_value(payload, "latest_version", "latestVersion", "version", "tag_name", "name"),
+    )
     latest_version_parts = parse_version_parts(latest_version)
     if latest_version_parts is None:
         raise ValueError("Update feed did not provide a valid semantic version")
 
-    download_url, asset_name = select_release_asset(payload.get("assets", []), platform)
+    preferred_download_keys = (
+        ("apk_url", "apkUrl", "aab_url", "aabUrl", "download_url", "downloadUrl")
+        if normalized_platform == "android"
+        else ("installer_url", "installerUrl", "portable_url", "portableUrl", "download_url", "downloadUrl")
+    )
+    download_url = first_non_blank(
+        get_string_value(platform_payload, *preferred_download_keys),
+        get_string_value(payload, *preferred_download_keys),
+    )
+    asset_name = asset_name_from_url(download_url)
+    if not download_url:
+        download_url, asset_name = select_release_asset(platform_payload.get("assets"), normalized_platform)
+    if not download_url:
+        download_url, asset_name = select_release_asset(payload.get("assets"), normalized_platform)
+
     current_version_parts = parse_version_parts(APP_VERSION) or (0, 0, 0)
     normalized_latest_version = ".".join(str(part) for part in latest_version_parts)
     update_available = latest_version_parts > current_version_parts
     status = "available" if update_available else "current"
-    release_url = str(payload.get("releaseUrl") or payload.get("html_url") or payload.get("url") or "").strip()
+    release_url = first_non_blank(
+        get_string_value(platform_payload, "folder_url", "folderUrl", "release_url", "releaseUrl", "html_url", "url"),
+        get_string_value(payload, "folder_url", "folderUrl", "release_url", "releaseUrl", "html_url", "url"),
+    )
 
     return {
         "status": status,
@@ -190,7 +297,10 @@ def parse_release_payload(payload: Any, platform: str) -> dict[str, Any]:
         "releaseUrl": release_url,
         "downloadUrl": download_url,
         "assetName": asset_name,
-        "publishedAt": str(payload.get("publishedAt") or payload.get("published_at") or payload.get("created_at") or "").strip(),
+        "publishedAt": first_non_blank(
+            get_string_value(platform_payload, "published_at", "publishedAt", "created_at", "createdAt"),
+            get_string_value(payload, "published_at", "publishedAt", "created_at", "createdAt"),
+        ),
         "message": (
             f"Version {normalized_latest_version} is available."
             if update_available
@@ -214,8 +324,9 @@ def fetch_update_result(platform: str) -> dict[str, Any]:
             "message": "No update feed is configured.",
         }
 
+    request_url = resolve_update_feed_request_url(UPDATE_FEED_URL)
     request = urlrequest.Request(
-        UPDATE_FEED_URL,
+        request_url,
         headers={
             "Accept": "application/json",
             "User-Agent": f"FHPlayer/{APP_VERSION}",
@@ -486,11 +597,32 @@ def execute_lovense_request(url: str, platform_name: str, payload: dict[str, Any
         method="POST",
     )
 
-    context = ssl._create_unverified_context() if url.startswith("https://") else None
+    context = ssl._create_unverified_context() if should_use_unverified_lovense_tls(url) else None
     with urlrequest.urlopen(request, timeout=timeout_seconds, context=context) as response:
         body = response.read().decode("utf-8")
 
     return json.loads(body)
+
+
+def should_use_unverified_lovense_tls(url: str) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    if parsed.scheme.lower() != "https":
+        return False
+
+    host = (parsed.hostname or "").strip()
+    if not host:
+        return False
+
+    try:
+        parsed_ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+
+    return parsed_ip.version == 4 and (
+        parsed_ip.is_private
+        or parsed_ip.is_loopback
+        or parsed_ip.is_link_local
+    )
 
 
 def lovense_request(

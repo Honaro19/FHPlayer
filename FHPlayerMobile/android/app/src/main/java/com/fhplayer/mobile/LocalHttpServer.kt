@@ -133,16 +133,16 @@ class LocalHttpServer(
     private fun normalizeUpdateResult(value: Any?): JSONObject? {
         val updateResult = value as? JSONObject ?: return null
         return JSONObject()
-            .put("status", updateResult.optString("status", "unknown"))
-            .put("checkedAt", updateResult.optString("checkedAt", ""))
-            .put("currentVersion", updateResult.optString("currentVersion", BuildConfig.VERSION_NAME))
-            .put("latestVersion", updateResult.optString("latestVersion", ""))
+            .put("status", UpdateManifestParser.normalizeOptionalString(updateResult.opt("status")).ifBlank { "unknown" })
+            .put("checkedAt", UpdateManifestParser.normalizeOptionalString(updateResult.opt("checkedAt")))
+            .put("currentVersion", UpdateManifestParser.normalizeOptionalString(updateResult.opt("currentVersion")).ifBlank { BuildConfig.VERSION_NAME })
+            .put("latestVersion", UpdateManifestParser.normalizeOptionalString(updateResult.opt("latestVersion")))
             .put("updateAvailable", updateResult.optBoolean("updateAvailable", false))
-            .put("releaseUrl", updateResult.optString("releaseUrl", ""))
-            .put("downloadUrl", updateResult.optString("downloadUrl", ""))
-            .put("assetName", updateResult.optString("assetName", ""))
-            .put("publishedAt", updateResult.optString("publishedAt", ""))
-            .put("message", updateResult.optString("message", ""))
+            .put("releaseUrl", UpdateManifestParser.normalizeOptionalString(updateResult.opt("releaseUrl")))
+            .put("downloadUrl", UpdateManifestParser.normalizeOptionalString(updateResult.opt("downloadUrl")))
+            .put("assetName", UpdateManifestParser.normalizeOptionalString(updateResult.opt("assetName")))
+            .put("publishedAt", UpdateManifestParser.normalizeOptionalString(updateResult.opt("publishedAt")))
+            .put("message", UpdateManifestParser.normalizeOptionalString(updateResult.opt("message")))
     }
 
     private fun buildSettingsPayload(): JSONObject =
@@ -637,7 +637,8 @@ class LocalHttpServer(
     }
 
     private fun executeLovenseRequest(url: String, platformName: String, payload: JSONObject, timeoutMs: Int): JSONObject {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+        val parsedUrl = URL(url)
+        val connection = (parsedUrl.openConnection() as HttpURLConnection).apply {
             connectTimeout = timeoutMs
             readTimeout = timeoutMs
             requestMethod = "POST"
@@ -647,7 +648,7 @@ class LocalHttpServer(
             setRequestProperty("X-platform", platformName)
         }
 
-        if (connection is HttpsURLConnection) {
+        if (connection is HttpsURLConnection && shouldUseUnsafeLovenseTls(parsedUrl)) {
             connection.sslSocketFactory = unsafeSslSocketFactory
             connection.hostnameVerifier = unsafeHostnameVerifier
         }
@@ -670,6 +671,25 @@ class LocalHttpServer(
         }
 
         return JSONObject(responseBody)
+    }
+
+    private fun shouldUseUnsafeLovenseTls(url: URL): Boolean {
+        if (!url.protocol.equals("https", ignoreCase = true)) {
+            return false
+        }
+
+        val host = url.host?.trim().orEmpty()
+        if (host.isEmpty()) {
+            return false
+        }
+
+        val directIpv4 = host.split('.')
+        if (directIpv4.size != 4 || directIpv4.any { part -> part.toIntOrNull() !in 0..255 }) {
+            return false
+        }
+
+        val address = InetAddress.getByName(host)
+        return address.hostAddress == host && (address.isSiteLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress)
     }
 
     @Throws(IOException::class)
@@ -952,88 +972,7 @@ class LocalHttpServer(
         return ""
     }
 
-    private fun parseVersionParts(version: String): List<Int>? {
-        val match = VERSION_PATTERN.matchEntire(version.trim()) ?: return null
-        return match.destructured.toList().map { it.toInt() }
-    }
-
-    private fun isVersionNewer(candidateVersion: List<Int>, currentVersion: List<Int>): Boolean {
-        val maxLength = maxOf(candidateVersion.size, currentVersion.size)
-        for (index in 0 until maxLength) {
-            val candidatePart = candidateVersion.getOrElse(index) { 0 }
-            val currentPart = currentVersion.getOrElse(index) { 0 }
-            if (candidatePart != currentPart) {
-                return candidatePart > currentPart
-            }
-        }
-        return false
-    }
-
     private fun utcNowIso(): String = Instant.now().toString()
-
-    private fun selectReleaseAsset(assets: JSONArray?, platform: String): Pair<String, String> {
-        if (assets == null) {
-            return "" to ""
-        }
-
-        val preferredSuffixes = if (platform == "android") listOf(".apk", ".aab") else listOf(".exe")
-        val normalizedAssets =
-            buildList {
-                for (index in 0 until assets.length()) {
-                    val asset = assets.optJSONObject(index) ?: continue
-                    add(
-                        asset.optString("browser_download_url", asset.optString("downloadUrl", "")) to
-                            asset.optString("name", ""),
-                    )
-                }
-            }
-
-        preferredSuffixes.forEach { suffix ->
-            normalizedAssets.firstOrNull { (_, name) -> name.lowercase(Locale.US).endsWith(suffix) }?.let { (url, name) ->
-                if (url.isNotBlank()) {
-                    return url to name
-                }
-            }
-        }
-
-        return "" to ""
-    }
-
-    private fun parseReleasePayload(payload: JSONObject, platform: String): JSONObject {
-        val latestVersionRaw =
-            firstNonBlank(
-                payload.optString("version", ""),
-                payload.optString("latestVersion", ""),
-                payload.optString("tag_name", ""),
-                payload.optString("name", ""),
-            )
-        val latestVersionParts =
-            parseVersionParts(latestVersionRaw)
-                ?: throw IllegalArgumentException("Update feed did not provide a valid semantic version")
-        val currentVersionParts = parseVersionParts(BuildConfig.VERSION_NAME) ?: listOf(0, 0, 0)
-        val normalizedLatestVersion = latestVersionParts.joinToString(".")
-        val updateAvailable = isVersionNewer(latestVersionParts, currentVersionParts)
-        val (downloadUrl, assetName) = selectReleaseAsset(payload.optJSONArray("assets"), platform)
-
-        return JSONObject()
-            .put("status", if (updateAvailable) "available" else "current")
-            .put("checkedAt", utcNowIso())
-            .put("currentVersion", BuildConfig.VERSION_NAME)
-            .put("latestVersion", normalizedLatestVersion)
-            .put("updateAvailable", updateAvailable)
-            .put("releaseUrl", firstNonBlank(payload.optString("releaseUrl", ""), payload.optString("html_url", ""), payload.optString("url", "")))
-            .put("downloadUrl", downloadUrl)
-            .put("assetName", assetName)
-            .put("publishedAt", firstNonBlank(payload.optString("publishedAt", ""), payload.optString("published_at", ""), payload.optString("created_at", "")))
-            .put(
-                "message",
-                if (updateAvailable) {
-                    "Version $normalizedLatestVersion is available."
-                } else {
-                    "You are already on the latest version (${BuildConfig.VERSION_NAME})."
-                },
-            )
-    }
 
     private fun fetchUpdateResult(platform: String): JSONObject {
         if (UPDATE_FEED_URL.isBlank()) {
@@ -1051,7 +990,8 @@ class LocalHttpServer(
         }
 
         return try {
-            val connection = (URL(UPDATE_FEED_URL).openConnection() as HttpURLConnection).apply {
+            val requestUrl = UpdateManifestParser.resolveUpdateFeedRequestUrl(UPDATE_FEED_URL)
+            val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 5000
                 readTimeout = 5000
                 requestMethod = "GET"
@@ -1068,7 +1008,7 @@ class LocalHttpServer(
                 throw IOException(responseBody.ifBlank { "Update check failed with HTTP $responseCode" })
             }
 
-            parseReleasePayload(JSONObject(responseBody), platform)
+            UpdateManifestParser.parseReleasePayload(JSONObject(responseBody), platform, BuildConfig.VERSION_NAME, utcNowIso())
         } catch (exception: Exception) {
             JSONObject()
                 .put("status", "error")
@@ -1191,8 +1131,8 @@ class LocalHttpServer(
         private const val HTTP_BAD_GATEWAY = 502
         private const val HTTP_GATEWAY_TIMEOUT = 504
         private const val HTTP_NOT_IMPLEMENTED = 501
-        private const val UPDATE_FEED_URL = "https://api.github.com/repos/Honaro19/FHPlayer/releases/latest"
-        private val VERSION_PATTERN = Regex("""^v?(\d+)\.(\d+)\.(\d+)$""")
+        private const val DEFAULT_UPDATE_FEED_URL = "https://drive.google.com/file/d/1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV/view?usp=sharing"
+        private val UPDATE_FEED_URL = BuildConfig.FHPLAYER_UPDATE_FEED_URL.ifBlank { DEFAULT_UPDATE_FEED_URL }
 
         private val unsafeHostnameVerifier = HostnameVerifier { _, _ -> true }
 

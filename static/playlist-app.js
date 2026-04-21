@@ -612,7 +612,7 @@ function renderUpdateStatus(result) {
   const status = String(result?.status || "muted");
   const checkedAt = String(result?.checkedAt || "");
   const latestVersion = String(result?.latestVersion || "");
-  const releaseUrl = String(result?.downloadUrl || result?.releaseUrl || "");
+  const releaseUrl = String(result?.releaseUrl || result?.downloadUrl || "");
   const message = String(result?.message || "");
   const detailLines = [];
   if (message) {
