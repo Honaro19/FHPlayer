@@ -315,9 +315,6 @@ else stop()</textarea>
                 <a id="update-release-link" class="button-link hidden" href="#" target="_blank" rel="noreferrer">Open release</a>
               </div>
             </div>
-            <p class="field-hint">
-              The update check downloads a version file from an external Google Drive location.
-            </p>
             <div id="update-status" class="status-note muted">
               Update checks are optional and currently disabled.
             </div>
@@ -406,6 +403,25 @@ else stop()</textarea>
         <div id="legal-notice-status" class="status-note hidden"></div>
         <div class="button-row compact-row">
           <button id="legal-notice-acknowledge-button" class="primary">I understand</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirmation-modal" class="modal-shell hidden" role="dialog" aria-modal="true" aria-labelledby="confirmation-modal-title">
+      <div class="modal-card">
+        <div class="section-head compact-head">
+          <h3 id="confirmation-modal-title">Confirmation</h3>
+          <span id="confirmation-modal-subtitle"></span>
+        </div>
+        <div id="confirmation-modal-body" class="modal-copy"></div>
+        <label id="confirmation-modal-checkbox-row" class="field toggle-row hidden">
+          <span id="confirmation-modal-checkbox-label">Don't show again</span>
+          <input id="confirmation-modal-checkbox" type="checkbox" />
+        </label>
+        <div id="confirmation-modal-status" class="status-note hidden"></div>
+        <div class="button-row compact-row">
+          <button id="confirmation-modal-cancel-button" class="secondary">Cancel</button>
+          <button id="confirmation-modal-confirm-button" class="primary">Continue</button>
         </div>
       </div>
     </div>

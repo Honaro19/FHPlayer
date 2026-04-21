@@ -227,19 +227,32 @@ const SIMULATED_TOYS = [
     fullFunctionNames: ["Vibrate", "Thrusting", "Suction"],
   },
 ];
-const UPDATE_CHECK_DISCLOSURE = "The update check downloads a version file from an external Google Drive location.";
 const LEGAL_NOTICE_HTML = `
   <p>The software is provided "as is", without warranty of any kind.</p>
   <p>Use of this software is at your own risk.</p>
+  <p>Before using this software, it is recommended to back up important data.</p>
+  <p>The software may contain bugs or incomplete functionality.</p>
   <p>The author is not liable for damages, especially:</p>
   <ul>
     <li>data loss</li>
     <li>system failures</li>
     <li>consequential damages</li>
   </ul>
+  <p>This software is provided free of charge without any support or maintenance obligation.</p>
   <p>Liability for intent and gross negligence remains unaffected where required by applicable law.</p>
   <p>This software is a private project and is not intended for production use.</p>
 `;
+const MANUAL_UPDATE_CHECK_DISCLOSURE = [
+  "During the update check, a version file is retrieved from an external Google Drive to determine whether a new version is available.",
+  "No update is downloaded automatically.",
+  "If an update is found, you can choose to open the release location manually and download it yourself.",
+].join("\n\n");
+const AUTOMATIC_UPDATE_CHECK_DISCLOSURE = [
+  "When enabled, the application will automatically check for updates by retrieving a version file from an external Google Drive.",
+  "No updates are downloaded automatically.",
+].join("\n\n");
+const EXTERNAL_RELEASE_DISCLOSURE = "You are about to open an external Google Drive location where releases are stored.";
+const UPDATE_STATUS_DISCLOSURE = "Checks for updates via external Google Drive.";
 
 const state = {
   playlist: [],
@@ -268,6 +281,8 @@ const state = {
     updates: {
       autoCheckEnabled: false,
       lastResult: null,
+      manualDisclosureAcknowledgedVersion: "",
+      releaseDisclosureSuppressedVersion: "",
     },
     ui: {
       showDiagnostics: true,
@@ -313,6 +328,7 @@ const state = {
   scheduledLovenseTimers: new Set(),
   lovenseAutoStopTimers: new Map(),
   legalNoticePromiseResolver: null,
+  confirmationModalResolver: null,
 };
 
 const ui = {
@@ -335,6 +351,16 @@ const ui = {
   legalNoticeBody: document.getElementById("legal-notice-body"),
   legalNoticeStatus: document.getElementById("legal-notice-status"),
   legalNoticeAcknowledgeButton: document.getElementById("legal-notice-acknowledge-button"),
+  confirmationModal: document.getElementById("confirmation-modal"),
+  confirmationModalTitle: document.getElementById("confirmation-modal-title"),
+  confirmationModalSubtitle: document.getElementById("confirmation-modal-subtitle"),
+  confirmationModalBody: document.getElementById("confirmation-modal-body"),
+  confirmationModalCheckboxRow: document.getElementById("confirmation-modal-checkbox-row"),
+  confirmationModalCheckboxLabel: document.getElementById("confirmation-modal-checkbox-label"),
+  confirmationModalCheckbox: document.getElementById("confirmation-modal-checkbox"),
+  confirmationModalStatus: document.getElementById("confirmation-modal-status"),
+  confirmationModalCancelButton: document.getElementById("confirmation-modal-cancel-button"),
+  confirmationModalConfirmButton: document.getElementById("confirmation-modal-confirm-button"),
   diagnosticsPanel: document.getElementById("diagnostics-panel"),
   diagnosticsStatus: document.getElementById("diagnostics-status"),
   diagnosticsPaths: document.getElementById("diagnostics-paths"),
@@ -467,8 +493,11 @@ function bindEvents() {
   ui.showDiagnosticsToggle.addEventListener("change", handleSectionVisibilityChange);
   ui.showFunscriptOverviewToggle.addEventListener("change", handleSectionVisibilityChange);
   ui.showExecutionLogToggle.addEventListener("change", handleSectionVisibilityChange);
-  ui.checkUpdatesButton.addEventListener("click", () => checkForUpdates({ automatic: false }));
+  ui.checkUpdatesButton.addEventListener("click", handleManualUpdateCheck);
+  ui.updateReleaseLink.addEventListener("click", handleUpdateReleaseClick);
   ui.legalNoticeAcknowledgeButton.addEventListener("click", acknowledgeLegalNotice);
+  ui.confirmationModalCancelButton.addEventListener("click", () => resolveConfirmationModal(false));
+  ui.confirmationModalConfirmButton.addEventListener("click", () => resolveConfirmationModal(true));
 
   ui.video.addEventListener("play", startSchedulerLoop);
   ui.video.addEventListener("pause", handleVideoPause);
@@ -535,6 +564,8 @@ function normalizeAppSettings(settings) {
     updates: {
       autoCheckEnabled: settings?.updates?.autoCheckEnabled === true,
       lastResult: normalizeUpdateResult(settings?.updates?.lastResult),
+      manualDisclosureAcknowledgedVersion: String(settings?.updates?.manualDisclosureAcknowledgedVersion || ""),
+      releaseDisclosureSuppressedVersion: String(settings?.updates?.releaseDisclosureSuppressedVersion || ""),
     },
     ui: {
       showDiagnostics: settings?.ui?.showDiagnostics !== false,
@@ -551,6 +582,8 @@ function buildAppSettingsPayload() {
   return {
     updates: {
       autoCheckEnabled: state.appSettings.updates.autoCheckEnabled,
+      manualDisclosureAcknowledgedVersion: state.appSettings.updates.manualDisclosureAcknowledgedVersion,
+      releaseDisclosureSuppressedVersion: state.appSettings.updates.releaseDisclosureSuppressedVersion,
     },
     ui: {
       showDiagnostics: state.appSettings.ui.showDiagnostics,
@@ -643,7 +676,7 @@ function renderUpdateStatus(result) {
   const latestVersion = String(result?.latestVersion || "");
   const releaseUrl = String(result?.releaseUrl || result?.downloadUrl || "");
   const message = String(result?.message || "");
-  const detailLines = [];
+  const detailLines = [UPDATE_STATUS_DISCLOSURE];
   if (message) {
     detailLines.push(message);
   }
@@ -651,7 +684,7 @@ function renderUpdateStatus(result) {
     detailLines.push(`Latest known version: ${latestVersion}`);
   }
   if (checkedAt) {
-    detailLines.push(`Last checked: ${checkedAt}`);
+    detailLines.push(`Last checked: ${formatLocalDateTime(checkedAt)}`);
   }
   if (!detailLines.length) {
     detailLines.push("No update information available yet.");
@@ -667,6 +700,26 @@ function renderUpdateStatus(result) {
     ui.updateReleaseLink.href = "#";
     ui.updateReleaseLink.classList.add("hidden");
   }
+}
+
+function formatLocalDateTime(value) {
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (!(parsed instanceof Date) || Number.isNaN(parsed.getTime())) {
+    return String(value || "");
+  }
+
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  });
+  const parts = formatter.formatToParts(parsed);
+  const lookup = (type) => parts.find((part) => part.type === type)?.value || "";
+  return `${lookup("day")} ${lookup("month")} ${lookup("year")}, ${lookup("hour")}:${lookup("minute")} ${lookup("timeZoneName")}`.trim();
 }
 
 function shouldShowLegalNotice() {
@@ -694,6 +747,66 @@ function renderLegalNoticeDialog(visible, errorMessage = "") {
   }
 }
 
+function renderConfirmationModal({
+  visible,
+  title = "Confirmation",
+  subtitle = "",
+  body = "",
+  checkboxLabel = "Don't show again",
+  checkboxVisible = false,
+  confirmLabel = "Continue",
+  cancelLabel = "Cancel",
+  errorMessage = "",
+} = {}) {
+  if (!ui.confirmationModal) {
+    return;
+  }
+
+  ui.confirmationModalTitle.textContent = title;
+  ui.confirmationModalSubtitle.textContent = subtitle;
+  ui.confirmationModalBody.textContent = body;
+  ui.confirmationModalCheckboxLabel.textContent = checkboxLabel;
+  ui.confirmationModalCheckbox.checked = false;
+  ui.confirmationModalCheckboxRow.classList.toggle("hidden", !checkboxVisible);
+  ui.confirmationModalConfirmButton.textContent = confirmLabel;
+  ui.confirmationModalCancelButton.textContent = cancelLabel;
+  ui.confirmationModal.classList.toggle("hidden", !visible);
+
+  if (errorMessage) {
+    ui.confirmationModalStatus.className = "status-note error";
+    ui.confirmationModalStatus.textContent = errorMessage;
+    ui.confirmationModalStatus.classList.remove("hidden");
+  } else {
+    ui.confirmationModalStatus.className = "status-note hidden";
+    ui.confirmationModalStatus.textContent = "";
+    ui.confirmationModalStatus.classList.add("hidden");
+  }
+
+  document.body.classList.toggle(
+    "modal-open",
+    visible || !ui.legalNoticeModal.classList.contains("hidden"),
+  );
+}
+
+function showConfirmationModal(options) {
+  renderConfirmationModal({ visible: true, ...options });
+  return new Promise((resolve) => {
+    state.confirmationModalResolver = resolve;
+  });
+}
+
+function resolveConfirmationModal(confirmed) {
+  if (!state.confirmationModalResolver) {
+    return;
+  }
+
+  const resolver = state.confirmationModalResolver;
+  state.confirmationModalResolver = null;
+  const dontShowAgain = ui.confirmationModalCheckbox.checked;
+  renderConfirmationModal({ visible: false });
+  resolver({ confirmed, dontShowAgain });
+}
+
 async function ensureLegalNoticeAcknowledged() {
   if (!shouldShowLegalNotice()) {
     renderLegalNoticeDialog(false);
@@ -716,18 +829,24 @@ async function acknowledgeLegalNotice() {
     return;
   }
 
+  const previousAcknowledgedVersion = state.appSettings.legal.lastAcknowledgedVersion;
   ui.legalNoticeAcknowledgeButton.disabled = true;
   state.appSettings.legal.lastAcknowledgedVersion = state.currentVersion;
+  renderLegalNoticeDialog(false);
+  if (state.legalNoticePromiseResolver) {
+    state.legalNoticePromiseResolver();
+    state.legalNoticePromiseResolver = null;
+  }
   try {
     await persistAppSettings();
-    renderLegalNoticeDialog(false);
-    if (state.legalNoticePromiseResolver) {
-      state.legalNoticePromiseResolver();
-      state.legalNoticePromiseResolver = null;
-    }
   } catch (error) {
-    state.appSettings.legal.lastAcknowledgedVersion = "";
+    state.appSettings.legal.lastAcknowledgedVersion = previousAcknowledgedVersion;
     renderLegalNoticeDialog(true, `Could not save the acknowledgement: ${String(error)}`);
+    appendLog({
+      ok: false,
+      title: "Could not save acknowledgement",
+      detail: String(error),
+    });
   }
 }
 
@@ -742,6 +861,20 @@ function renderSectionVisibilitySettings() {
 
 async function handleUpdateAutoCheckChange() {
   const previousValue = state.appSettings.updates.autoCheckEnabled;
+  const nextValue = ui.updateAutoCheck.checked;
+  if (nextValue) {
+    const confirmation = await showConfirmationModal({
+      title: "Automatic update checks",
+      subtitle: "Confirmation required before enabling automatic checks.",
+      body: AUTOMATIC_UPDATE_CHECK_DISCLOSURE,
+      confirmLabel: "Enable",
+    });
+    if (!confirmation.confirmed) {
+      ui.updateAutoCheck.checked = previousValue;
+      return;
+    }
+  }
+
   state.appSettings.updates.autoCheckEnabled = ui.updateAutoCheck.checked;
   renderUpdateSettings();
 
@@ -761,6 +894,75 @@ async function handleUpdateAutoCheckChange() {
       message: `Could not save update setting: ${String(error)}`,
     });
   }
+}
+
+async function handleManualUpdateCheck() {
+  if (state.appSettings.updates.manualDisclosureAcknowledgedVersion !== state.currentVersion) {
+    const confirmation = await showConfirmationModal({
+      title: "Update check",
+      subtitle: "This notice is shown once per installed version.",
+      body: MANUAL_UPDATE_CHECK_DISCLOSURE,
+      confirmLabel: "Check now",
+    });
+    if (!confirmation.confirmed) {
+      return;
+    }
+
+    const previousAcknowledgedVersion = state.appSettings.updates.manualDisclosureAcknowledgedVersion;
+    state.appSettings.updates.manualDisclosureAcknowledgedVersion = state.currentVersion;
+    try {
+      await persistAppSettings();
+    } catch (error) {
+      state.appSettings.updates.manualDisclosureAcknowledgedVersion = previousAcknowledgedVersion;
+      renderUpdateStatus({
+        status: "error",
+        message: `Could not save the update notice acknowledgement: ${String(error)}`,
+      });
+      return;
+    }
+  }
+
+  await checkForUpdates({ automatic: false });
+}
+
+async function handleUpdateReleaseClick(event) {
+  const releaseUrl = String(ui.updateReleaseLink?.href || "").trim();
+  if (!releaseUrl || releaseUrl === "#") {
+    event.preventDefault();
+    return;
+  }
+
+  event.preventDefault();
+  if (state.appSettings.updates.releaseDisclosureSuppressedVersion !== state.currentVersion) {
+    const confirmation = await showConfirmationModal({
+      title: "Open release",
+      subtitle: "You are about to leave FHPlayer and open an external location.",
+      body: EXTERNAL_RELEASE_DISCLOSURE,
+      checkboxVisible: true,
+      checkboxLabel: "Don't show again",
+      confirmLabel: "Open release",
+    });
+    if (!confirmation.confirmed) {
+      return;
+    }
+
+    if (confirmation.dontShowAgain) {
+      const previousSuppressedVersion = state.appSettings.updates.releaseDisclosureSuppressedVersion;
+      state.appSettings.updates.releaseDisclosureSuppressedVersion = state.currentVersion;
+      try {
+        await persistAppSettings();
+      } catch (error) {
+        state.appSettings.updates.releaseDisclosureSuppressedVersion = previousSuppressedVersion;
+        appendLog({
+          ok: false,
+          title: "Could not save release notice preference",
+          detail: String(error),
+        });
+      }
+    }
+  }
+
+  window.open(releaseUrl, "_blank", "noopener,noreferrer");
 }
 
 async function handleSectionVisibilityChange() {
@@ -787,10 +989,6 @@ async function checkForUpdates({ automatic = false } = {}) {
   }
 
   ui.checkUpdatesButton.disabled = true;
-  renderUpdateStatus({
-    status: "muted",
-    message: `${UPDATE_CHECK_DISCLOSURE}\nChecking for updates now...`,
-  });
   try {
     const response = await fetch("/api/update/check", {
       method: "POST",
@@ -1915,7 +2113,7 @@ function appendLog(entry) {
   item.className = `log-entry ${entry.ok ? "ok" : "error"}`;
   item.innerHTML = `
     <strong>${escapeHtml(entry.title)}</strong>
-    <span>${new Date().toLocaleTimeString("en-US")}</span>
+    <span>${escapeHtml(formatLocalDateTime(new Date()))}</span>
     <pre>${escapeHtml(entry.detail)}</pre>
   `;
   ui.log.prepend(item);

@@ -4,6 +4,8 @@ FHPlayer is a local video player that plays videos in the browser and triggers L
 
 FHPlayer is a private project and is not intended for production use.
 
+Before using this software, it is recommended to back up important data.
+
 ## Features
 
 - Load multiple videos with matching `funscript` files as a playlist
@@ -95,8 +97,6 @@ The manifest is shared between Windows and Android. The UI opens the platform-sp
 
 The manifest contract is versioned explicitly and the current app expects `schema_version: 1`.
 
-The software optionally checks for updates by retrieving a version file from Google Drive. No personal data is stored or processed as part of that update check.
-
 On desktop you can still override that feed URL for testing or custom hosting:
 
 ```powershell
@@ -127,7 +127,9 @@ The release workflow and the local manifest template are documented in:
 - FHPlayer is licensed under the MIT License with additional disclaimer text in `LICENSE`.
 - The software is provided "as is" without warranty of any kind.
 - Use of the software is at your own risk.
+- The software may contain bugs or incomplete functionality.
 - The author is not liable for damages, especially data loss, system failures, or consequential damages.
+- This software is provided free of charge without any support or maintenance obligation.
 - Liability for intent and gross negligence remains unaffected where required by applicable law.
 - FHPlayer is a private project and is not intended for production use.
 

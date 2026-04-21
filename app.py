@@ -107,6 +107,12 @@ def normalize_settings(payload: Any) -> dict[str, Any]:
         "updates": {
             "autoCheckEnabled": bool(updates_payload.get("autoCheckEnabled", False)),
             "lastResult": normalize_update_result(updates_payload.get("lastResult")),
+            "manualDisclosureAcknowledgedVersion": normalize_optional_string(
+                updates_payload.get("manualDisclosureAcknowledgedVersion")
+            ),
+            "releaseDisclosureSuppressedVersion": normalize_optional_string(
+                updates_payload.get("releaseDisclosureSuppressedVersion")
+            ),
         },
         "ui": {
             "showDiagnostics": bool(ui_payload.get("showDiagnostics", True)),
@@ -879,8 +885,17 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
 
         current_settings = load_settings()
         updates_payload = payload.get("updates", {}) if isinstance(payload, dict) else {}
-        if isinstance(updates_payload, dict) and "autoCheckEnabled" in updates_payload:
-            current_settings["updates"]["autoCheckEnabled"] = bool(updates_payload.get("autoCheckEnabled"))
+        if isinstance(updates_payload, dict):
+            if "autoCheckEnabled" in updates_payload:
+                current_settings["updates"]["autoCheckEnabled"] = bool(updates_payload.get("autoCheckEnabled"))
+            if "manualDisclosureAcknowledgedVersion" in updates_payload:
+                current_settings["updates"]["manualDisclosureAcknowledgedVersion"] = normalize_optional_string(
+                    updates_payload.get("manualDisclosureAcknowledgedVersion")
+                )
+            if "releaseDisclosureSuppressedVersion" in updates_payload:
+                current_settings["updates"]["releaseDisclosureSuppressedVersion"] = normalize_optional_string(
+                    updates_payload.get("releaseDisclosureSuppressedVersion")
+                )
         ui_payload = payload.get("ui", {}) if isinstance(payload, dict) else {}
         if isinstance(ui_payload, dict):
             if "showDiagnostics" in ui_payload:

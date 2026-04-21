@@ -1,0 +1,31 @@
+UPDATE DISCLOSURE TEMPLATE
+
+Manual update check
+During the update check, a version file is retrieved from an external source to determine whether a new version is available.
+
+No update is downloaded automatically.
+
+If an update is found, you can choose to open the release location manually and download it yourself.
+
+Automatic update checks
+When enabled, the application will automatically check for updates by retrieving a version file from an external source.
+
+No updates are downloaded automatically.
+
+External release link
+You are about to leave this application and open an external location.
+
+Optional checkbox
+Don't show again
+
+Short status label
+Checks for updates via an external source.
+
+Service-specific wording example
+During the update check, a version file is retrieved from an external Google Drive to determine whether a new version is available.
+
+When enabled, the application will automatically check for updates by retrieving a version file from an external Google Drive.
+
+You are about to leave this application and open an external Google Drive location where releases are stored.
+
+Checks for updates via external Google Drive.

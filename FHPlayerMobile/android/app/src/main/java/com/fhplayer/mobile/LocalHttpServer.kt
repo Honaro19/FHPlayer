@@ -119,7 +119,17 @@ class LocalHttpServer(
         val updates = payload?.optJSONObject("updates") ?: JSONObject()
         val ui = payload?.optJSONObject("ui") ?: JSONObject()
         val legal = payload?.optJSONObject("legal") ?: JSONObject()
-        val normalizedUpdates = JSONObject().put("autoCheckEnabled", updates.optBoolean("autoCheckEnabled", false))
+        val normalizedUpdates =
+            JSONObject()
+                .put("autoCheckEnabled", updates.optBoolean("autoCheckEnabled", false))
+                .put(
+                    "manualDisclosureAcknowledgedVersion",
+                    UpdateManifestParser.normalizeOptionalString(updates.opt("manualDisclosureAcknowledgedVersion")),
+                )
+                .put(
+                    "releaseDisclosureSuppressedVersion",
+                    UpdateManifestParser.normalizeOptionalString(updates.opt("releaseDisclosureSuppressedVersion")),
+                )
         normalizeUpdateResult(updates.opt("lastResult"))?.let { normalizedUpdates.put("lastResult", it) }
         val normalizedUi =
             JSONObject()
@@ -512,9 +522,22 @@ class LocalHttpServer(
             val payload = parseJsonObject(request.body)
             val currentSettings = loadSettings()
             val updates = payload.optJSONObject("updates") ?: JSONObject()
-            if (updates.has("autoCheckEnabled")) {
-                currentSettings.optJSONObject("updates")
-                    ?.put("autoCheckEnabled", updates.optBoolean("autoCheckEnabled"))
+            currentSettings.optJSONObject("updates")?.let { updateSettings ->
+                if (updates.has("autoCheckEnabled")) {
+                    updateSettings.put("autoCheckEnabled", updates.optBoolean("autoCheckEnabled"))
+                }
+                if (updates.has("manualDisclosureAcknowledgedVersion")) {
+                    updateSettings.put(
+                        "manualDisclosureAcknowledgedVersion",
+                        UpdateManifestParser.normalizeOptionalString(updates.opt("manualDisclosureAcknowledgedVersion")),
+                    )
+                }
+                if (updates.has("releaseDisclosureSuppressedVersion")) {
+                    updateSettings.put(
+                        "releaseDisclosureSuppressedVersion",
+                        UpdateManifestParser.normalizeOptionalString(updates.opt("releaseDisclosureSuppressedVersion")),
+                    )
+                }
             }
             val ui = payload.optJSONObject("ui") ?: JSONObject()
             currentSettings.optJSONObject("ui")?.let { uiSettings ->

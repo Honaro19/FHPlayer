@@ -221,6 +221,10 @@ textarea {
   backdrop-filter: blur(8px);
 }
 
+.modal-shell.hidden {
+  display: none;
+}
+
 .modal-card {
   width: min(720px, 100%);
   padding: 22px;
