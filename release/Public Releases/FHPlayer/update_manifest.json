@@ -13,8 +13,8 @@
                                       "installer_url":  null,
                                       "portable_url":  null,
                                       "sha256":  {
-                                                     "installer":  "c0bbbd2a978140f3f99ce613646cbe513bedd64a8a0cd74dac987ea7ce9364eb",
-                                                     "portable":  "52905c6ad84ae02e1f7f6635e46b68c67b37af0e99b88adfce83413330a9e809"
+                                                     "installer":  "4978ec86262892436ad51ef2253a4e4436172a1712b1dc6647af17477fcc14f8",
+                                                     "portable":  "493cfdba00d6d738826daf5ee063457ef7174420fc1dee79b26fa07767a2f9ad"
                                                  }
                                   },
                       "android":  {
@@ -22,8 +22,8 @@
                                       "apk_url":  null,
                                       "aab_url":  null,
                                       "sha256":  {
-                                                     "apk":  "61961101b9659fdca818860a9ad3b309daca710e39e549571cb751cf2d4a5244",
-                                                     "aab":  "a64b28a1a312ce37895b0c618f1ec20b15354fafe2703fd66a738a01d3482083"
+                                                     "apk":  "aff164e0e8cee0bd9340559b352741fe49114b72d34e5c63b729276d4ecc6190",
+                                                     "aab":  "2eca5c5d653308ddc0dbc7e5bf35349352cf7ed68da3a9b25105a9c42f5c679a"
                                                  }
                                   }
                   }

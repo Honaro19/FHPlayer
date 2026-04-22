@@ -1,2 +1,2 @@
-c0bbbd2a978140f3f99ce613646cbe513bedd64a8a0cd74dac987ea7ce9364eb *FHPlayer-0.1.1-Setup.exe
-52905c6ad84ae02e1f7f6635e46b68c67b37af0e99b88adfce83413330a9e809 *FHPlayer-Portable-0.1.1.zip
+4978ec86262892436ad51ef2253a4e4436172a1712b1dc6647af17477fcc14f8 *FHPlayer-0.1.1-Setup.exe
+493cfdba00d6d738826daf5ee063457ef7174420fc1dee79b26fa07767a2f9ad *FHPlayer-Portable-0.1.1.zip

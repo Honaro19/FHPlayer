@@ -242,15 +242,10 @@ const LEGAL_NOTICE_HTML = `
   <p>Liability for intent and gross negligence remains unaffected where required by applicable law.</p>
   <p>This software is a private project and is not intended for production use.</p>
 `;
-const MANUAL_UPDATE_CHECK_DISCLOSURE = [
-  "During the update check, a version file is retrieved from an external Google Drive to determine whether a new version is available.",
-  "No update is downloaded automatically.",
-  "If an update is found, you can choose to open the release location manually and download it yourself.",
-].join("\n\n");
-const AUTOMATIC_UPDATE_CHECK_DISCLOSURE = [
-  "When enabled, the application will automatically check for updates by retrieving a version file from an external Google Drive.",
-  "No updates are downloaded automatically.",
-].join("\n\n");
+const MANUAL_UPDATE_CHECK_DISCLOSURE =
+  "During the update check, a version file is retrieved from an external Google Drive to determine whether a new version is available. No update is downloaded automatically. If an update is found, you can choose to open the release location manually and download it yourself.";
+const AUTOMATIC_UPDATE_CHECK_DISCLOSURE =
+  "When enabled, the application will automatically check for updates by retrieving a version file from an external Google Drive. No updates are downloaded automatically.";
 const EXTERNAL_RELEASE_DISCLOSURE = "You are about to open an external Google Drive location where releases are stored.";
 const UPDATE_STATUS_DISCLOSURE = "Checks for updates via external Google Drive.";
 
@@ -709,7 +704,7 @@ function formatLocalDateTime(value) {
   }
 
   const formatter = new Intl.DateTimeFormat("en-GB", {
-    day: "2-digit",
+    day: "numeric",
     month: "short",
     year: "numeric",
     hour: "2-digit",

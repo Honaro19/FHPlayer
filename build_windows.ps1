@@ -106,7 +106,7 @@ try {
     --name FHPlayer `
     --onedir `
     --console `
-    --specpath $tempRoot `
+    --specpath $resolvedTempRoot `
     --distpath $tempDistDir `
     --workpath $tempBuildDir `
     --add-data "${tempStaticDir};static" `
