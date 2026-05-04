@@ -12,29 +12,51 @@ body:
   - type: input
     id: version
     attributes:
-      label: Version
-      description: Which version of FHPlayer are you using?
+      label: App Version
+      description: Which version are you using?
       placeholder: e.g. 0.1.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows
+        - Android (APK)
+        - Android (AAB)
     validations:
       required: true
 
   - type: dropdown
     id: install_type
     attributes:
-      label: Installation Type
+      label: Installation Type (Windows only)
       options:
         - Setup (Installer)
         - Portable Version
+        - Not applicable
     validations:
       required: true
 
   - type: input
     id: os
     attributes:
-      label: Operating System
-      description: e.g. Windows 10 / Windows 11
+      label: Operating System / Android Version
+      description: |
+        Examples:
+        - Windows 10 / Windows 11
+        - Android 13 / Android 14
     validations:
       required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device (Android only)
+      description: e.g. Samsung Galaxy S21
+      placeholder: Optional for Windows users
 
   - type: textarea
     id: description
@@ -50,8 +72,8 @@ body:
       label: Steps to Reproduce
       description: How can the issue be reproduced?
       placeholder: |
-        1. Start the program
-        2. Click on ...
+        1. Start the app
+        2. Tap on ...
         3. ...
         4. Error occurs
     validations:
@@ -69,7 +91,7 @@ body:
     id: logs
     attributes:
       label: Logs / Screenshots
-      description: Attach logs or screenshots if available
+      description: Attach logs, screenshots, or crash reports if available
 
   - type: textarea
     id: additional
