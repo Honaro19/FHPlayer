@@ -1,0 +1,61 @@
+name: 🖥️ Windows Bug Report
+description: Report a bug in the Windows version of FHPlayer
+title: "[BUG][Windows] "
+labels: ["bug", "windows"]
+
+body:
+  - type: input
+    id: version
+    attributes:
+      label: App Version
+      placeholder: e.g. 0.1.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_type
+    attributes:
+      label: Installation Type
+      options:
+        - Setup (Installer)
+        - Portable Version
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Windows Version
+      placeholder: e.g. Windows 10 / Windows 11
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Start program
+        2. Click ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Screenshots
