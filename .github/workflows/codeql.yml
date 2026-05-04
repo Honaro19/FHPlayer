@@ -81,14 +81,14 @@ jobs:
     # Gradle explicitly for the CodeQL Android/Kotlin build.
     - name: Set up Gradle for Android/Kotlin
       if: matrix.language == 'java-kotlin'
-      uses: gradle/actions/setup-gradle@v4
+      uses: gradle/actions/setup-gradle@v6
       with:
         gradle-version: '8.0.2'
 
     # Android builds require an Android SDK on the runner.
     - name: Set up Android SDK for Android/Kotlin
       if: matrix.language == 'java-kotlin'
-      uses: android-actions/setup-android@v3
+      uses: android-actions/setup-android@v4
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
