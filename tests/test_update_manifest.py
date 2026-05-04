@@ -13,14 +13,6 @@ class UpdateManifestTests(unittest.TestCase):
         contract_path = Path(__file__).parent / "fixtures" / "update-manifest-contract.json"
         cls.contract = json.loads(contract_path.read_text(encoding="utf-8"))
 
-    def test_resolve_update_feed_request_url_matches_contract(self) -> None:
-        for case in self.contract["resolve_update_feed_request_url"]:
-            with self.subTest(case=case["name"]):
-                self.assertEqual(
-                    app.resolve_update_feed_request_url(case["source"]),
-                    case["expected"],
-                )
-
     def test_parse_release_payload_matches_contract(self) -> None:
         for case in self.contract["manifest_cases"]:
             payload = case["payload"]
@@ -44,6 +36,21 @@ class UpdateManifestTests(unittest.TestCase):
         for key, expected_value in case["expected"].items():
             with self.subTest(field=key):
                 self.assertEqual(result[key], expected_value)
+
+    def test_normalize_update_result_rejects_legacy_results_without_source_url(self) -> None:
+        self.assertIsNone(
+            app.normalize_update_result(
+                {
+                    "status": "current",
+                    "checkedAt": "2026-05-04T08:14:17Z",
+                    "currentVersion": "0.1.2",
+                    "latestVersion": "0.1.2",
+                    "updateAvailable": False,
+                    "releaseUrl": "https://example.com/old-release-location",
+                    "message": "You are already on the latest version (0.1.2).",
+                }
+            )
+        )
 
     def test_parse_release_payload_rejects_missing_schema_version(self) -> None:
         with self.assertRaisesRegex(ValueError, "schema_version must be 1"):

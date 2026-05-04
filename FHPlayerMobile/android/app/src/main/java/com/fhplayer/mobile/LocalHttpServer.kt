@@ -156,6 +156,11 @@ class LocalHttpServer(
 
     private fun normalizeUpdateResult(value: Any?): JSONObject? {
         val updateResult = value as? JSONObject ?: return null
+        val sourceUrl = UpdateManifestParser.normalizeOptionalString(updateResult.opt("sourceUrl"))
+        if (sourceUrl != UPDATE_FEED_URL) {
+            return null
+        }
+
         return JSONObject()
             .put("status", UpdateManifestParser.normalizeOptionalString(updateResult.opt("status")).ifBlank { "unknown" })
             .put("checkedAt", UpdateManifestParser.normalizeOptionalString(updateResult.opt("checkedAt")))
@@ -167,6 +172,7 @@ class LocalHttpServer(
             .put("assetName", UpdateManifestParser.normalizeOptionalString(updateResult.opt("assetName")))
             .put("publishedAt", UpdateManifestParser.normalizeOptionalString(updateResult.opt("publishedAt")))
             .put("message", UpdateManifestParser.normalizeOptionalString(updateResult.opt("message")))
+            .put("sourceUrl", sourceUrl)
     }
 
     private fun buildSettingsPayload(): JSONObject =
@@ -178,7 +184,8 @@ class LocalHttpServer(
                 "updateSupport",
                 JSONObject()
                     .put("configured", UPDATE_FEED_URL.isNotBlank())
-                    .put("sourceUrl", UPDATE_FEED_URL),
+                    .put("sourceUrl", UPDATE_FEED_URL)
+                    .put("releaseUrl", RELEASE_PAGE_URL),
             )
 
     private fun settingsFile(): File = File(context.filesDir, "fhplayer-settings.json")
@@ -906,7 +913,8 @@ class LocalHttpServer(
                         "updateSupport",
                         JSONObject()
                             .put("configured", UPDATE_FEED_URL.isNotBlank())
-                            .put("sourceUrl", UPDATE_FEED_URL),
+                            .put("sourceUrl", UPDATE_FEED_URL)
+                            .put("releaseUrl", RELEASE_PAGE_URL),
                     ),
             )
         } catch (exception: JSONException) {
@@ -958,7 +966,14 @@ class LocalHttpServer(
                 .put("ok", statusCode == HTTP_OK)
                 .put("currentVersion", BuildConfig.VERSION_NAME)
                 .put("result", updateResult)
-                .put("settings", savedSettings),
+                .put("settings", savedSettings)
+                .put(
+                    "updateSupport",
+                    JSONObject()
+                        .put("configured", UPDATE_FEED_URL.isNotBlank())
+                        .put("sourceUrl", UPDATE_FEED_URL)
+                        .put("releaseUrl", RELEASE_PAGE_URL),
+                ),
         )
     }
 
@@ -1579,16 +1594,16 @@ class LocalHttpServer(
                 .put("currentVersion", BuildConfig.VERSION_NAME)
                 .put("latestVersion", "")
                 .put("updateAvailable", false)
-                .put("releaseUrl", "")
+                .put("releaseUrl", RELEASE_PAGE_URL)
                 .put("downloadUrl", "")
                 .put("assetName", "")
                 .put("publishedAt", "")
                 .put("message", "No update feed is configured.")
+                .put("sourceUrl", UPDATE_FEED_URL)
         }
 
         return try {
-            val requestUrl = UpdateManifestParser.resolveUpdateFeedRequestUrl(UPDATE_FEED_URL)
-            val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
+            val connection = (URL(UPDATE_FEED_URL).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 5000
                 readTimeout = 5000
                 requestMethod = "GET"
@@ -1601,11 +1616,27 @@ class LocalHttpServer(
                 stream.bufferedReader(StandardCharsets.UTF_8).readText()
             }.orEmpty()
 
+            if (UPDATE_FEED_URL == DEFAULT_UPDATE_FEED_URL && responseCode == HTTP_NOT_FOUND) {
+                return JSONObject()
+                    .put("status", "unavailable")
+                    .put("checkedAt", utcNowIso())
+                    .put("currentVersion", BuildConfig.VERSION_NAME)
+                    .put("latestVersion", "")
+                    .put("updateAvailable", false)
+                    .put("releaseUrl", RELEASE_PAGE_URL)
+                    .put("downloadUrl", "")
+                    .put("assetName", "")
+                    .put("publishedAt", "")
+                    .put("message", "No GitHub release has been published yet.")
+                    .put("sourceUrl", UPDATE_FEED_URL)
+            }
+
             if (responseCode >= 400) {
                 throw IOException(responseBody.ifBlank { "Update check failed with HTTP $responseCode" })
             }
 
             UpdateManifestParser.parseReleasePayload(JSONObject(responseBody), platform, BuildConfig.VERSION_NAME, utcNowIso())
+                .put("sourceUrl", UPDATE_FEED_URL)
         } catch (exception: Exception) {
             JSONObject()
                 .put("status", "error")
@@ -1613,11 +1644,12 @@ class LocalHttpServer(
                 .put("currentVersion", BuildConfig.VERSION_NAME)
                 .put("latestVersion", "")
                 .put("updateAvailable", false)
-                .put("releaseUrl", "")
+                .put("releaseUrl", RELEASE_PAGE_URL)
                 .put("downloadUrl", "")
                 .put("assetName", "")
                 .put("publishedAt", "")
                 .put("message", exception.message ?: exception.javaClass.simpleName)
+                .put("sourceUrl", UPDATE_FEED_URL)
         }
     }
 
@@ -1732,7 +1764,8 @@ class LocalHttpServer(
         private const val HTTP_BAD_GATEWAY = 502
         private const val HTTP_GATEWAY_TIMEOUT = 504
         private const val HTTP_NOT_IMPLEMENTED = 501
-        private const val DEFAULT_UPDATE_FEED_URL = "https://drive.google.com/file/d/1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV/view?usp=sharing"
+        private const val DEFAULT_UPDATE_FEED_URL = "https://api.github.com/repos/Honaro19/FHPlayer/releases/latest"
+        private const val RELEASE_PAGE_URL = "https://github.com/Honaro19/FHPlayer/releases"
         private val UPDATE_FEED_URL = BuildConfig.FHPLAYER_UPDATE_FEED_URL.ifBlank { DEFAULT_UPDATE_FEED_URL }
 
         private val unsafeHostnameVerifier = HostnameVerifier { _, _ -> true }

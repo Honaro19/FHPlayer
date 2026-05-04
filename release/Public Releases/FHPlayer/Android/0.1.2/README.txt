@@ -13,8 +13,8 @@ Installation:
 
 Notes:
 - On first start FHPlayer creates its managed Library folders inside the app storage area.
-- Automatic update checks use the shared FHPlayer manifest and open the public Android release folder.
-- Update checks retrieve a version manifest from a Google Drive folder. No personal data is collected or stored by the application.
+- Automatic update checks use GitHub Releases metadata and open the public GitHub release page.
+- Update checks retrieve release metadata from GitHub. No personal data is collected or stored by the application.
 - Before using this software, it is recommended to back up important data.
 - The software may contain bugs or incomplete functionality.
 - This software is provided free of charge without any support or maintenance obligation.

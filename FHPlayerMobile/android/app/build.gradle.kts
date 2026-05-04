@@ -16,7 +16,7 @@ val appVersionMatch = Regex("""^(\d+)\.(\d+)\.(\d+)$""").matchEntire(appVersion)
 val appVersionCode = appVersionMatch.destructured.let { (major, minor, patch) ->
     major.toInt() * 10000 + minor.toInt() * 100 + patch.toInt()
 }
-val defaultUpdateFeedUrl = "https://drive.google.com/file/d/1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV/view?usp=sharing"
+val defaultUpdateFeedUrl = "https://api.github.com/repos/Honaro19/FHPlayer/releases/latest"
 val updateFeedUrl =
     providers.gradleProperty("fhplayerUpdateFeedUrl").orNull?.trim()?.takeIf { it.isNotBlank() }
         ?: providers.environmentVariable("FHPLAYER_UPDATE_FEED_URL").orNull?.trim()?.takeIf { it.isNotBlank() }

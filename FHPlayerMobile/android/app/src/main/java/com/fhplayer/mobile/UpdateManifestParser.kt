@@ -18,34 +18,10 @@ internal object UpdateManifestParser {
         }
     }
 
-    fun resolveUpdateFeedRequestUrl(sourceUrl: String): String {
-        val normalizedSourceUrl = sourceUrl.trim()
-        if (normalizedSourceUrl.isBlank()) {
-            return ""
-        }
-
-        val uri = URI(normalizedSourceUrl)
-        val host = uri.host?.lowercase(Locale.US).orEmpty()
-        if (host != "drive.google.com" && host != "www.drive.google.com") {
-            return normalizedSourceUrl
-        }
-
-        val pathSegments = uri.path.orEmpty().trim('/').split('/').filter { it.isNotBlank() }
-        val fileId =
-            when {
-                pathSegments.size >= 3 && pathSegments[0] == "file" && pathSegments[1] == "d" -> pathSegments[2]
-                else -> parseQueryParameter(uri.rawQuery, "id")
-            }.trim()
-
-        return if (fileId.isNotEmpty()) {
-            "https://drive.google.com/uc?export=download&id=$fileId"
-        } else {
-            normalizedSourceUrl
-        }
-    }
-
     fun parseReleasePayload(payload: JSONObject, platform: String, currentVersion: String, checkedAt: String = Instant.now().toString()): JSONObject {
-        requireManifestSchemaVersion(payload)
+        if (!isGitHubReleasePayload(payload)) {
+            requireManifestSchemaVersion(payload)
+        }
         val normalizedPlatform = normalizeUpdatePlatform(platform)
         val platformPayload = extractPlatformPayload(payload, normalizedPlatform)
         val latestVersionRaw =
@@ -126,6 +102,17 @@ internal object UpdateManifestParser {
         require(schemaVersion == 1) { "Update manifest schema_version must be 1" }
     }
 
+    private fun isGitHubReleasePayload(payload: JSONObject): Boolean {
+        val htmlUrl = getStringValue(payload, "html_url")
+        val tagName = getStringValue(payload, "tag_name")
+        val uri = runCatching { URI(htmlUrl) }.getOrNull()
+        val host = uri?.host?.lowercase(Locale.US).orEmpty()
+        return uri?.scheme == "https" &&
+            host == "github.com" &&
+            uri.path.orEmpty().contains("/releases/tag/") &&
+            tagName.isNotBlank()
+    }
+
     private fun parseVersionParts(version: String): List<Int>? {
         val match = versionPattern.matchEntire(version.trim()) ?: return null
         return match.destructured.toList().map { it.toInt() }
@@ -185,20 +172,6 @@ internal object UpdateManifestParser {
             return ""
         }
         return path.substringAfterLast('/')
-    }
-
-    private fun parseQueryParameter(rawQuery: String?, key: String): String {
-        if (rawQuery.isNullOrBlank()) {
-            return ""
-        }
-
-        return rawQuery
-            .split('&')
-            .firstNotNullOfOrNull { pair ->
-                val parts = pair.split('=', limit = 2)
-                if (parts.firstOrNull() == key) parts.getOrElse(1) { "" } else null
-            }
-            .orEmpty()
     }
 
     private fun selectReleaseAsset(assets: JSONArray?, platform: String): Pair<String, String> {

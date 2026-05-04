@@ -31,4 +31,4 @@ If a project uses a named service, replace "external source" with the concrete p
 
 Example:
 
-The software may optionally check for updates by retrieving a version file from an external Google Drive.
+The software may optionally check for updates by retrieving release metadata from GitHub.

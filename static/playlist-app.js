@@ -254,11 +254,11 @@ const LEGAL_NOTICE_HTML = `
   <p>This software is a private project and is not intended for production use.</p>
 `;
 const MANUAL_UPDATE_CHECK_DISCLOSURE =
-  "During the update check, a version file is retrieved from an external Google Drive to determine whether a new version is available. No update is downloaded automatically. If an update is found, you can choose to open the release location manually and download it yourself.";
+  "During the update check, release metadata is retrieved from GitHub to determine whether a new version is available. No update is downloaded automatically. If an update is found, you can choose to open the release location manually and download it yourself.";
 const AUTOMATIC_UPDATE_CHECK_DISCLOSURE =
-  "When enabled, the application will automatically check for updates by retrieving a version file from an external Google Drive. No updates are downloaded automatically.";
-const EXTERNAL_RELEASE_DISCLOSURE = "You are about to open an external Google Drive location where releases are stored.";
-const UPDATE_STATUS_DISCLOSURE = "Checks for updates via external Google Drive.";
+  "When enabled, the application will automatically check for updates by retrieving release metadata from GitHub. No updates are downloaded automatically.";
+const EXTERNAL_RELEASE_DISCLOSURE = "You are about to open an external GitHub release page where releases are stored.";
+const UPDATE_STATUS_DISCLOSURE = "Checks for updates via GitHub Releases.";
 
 const state = {
   playlist: [],
@@ -289,6 +289,7 @@ const state = {
   updateSupport: {
     configured: false,
     sourceUrl: "",
+    releaseUrl: "",
   },
   appSettings: {
     updates: {
@@ -646,12 +647,14 @@ async function loadAppSettings() {
     state.updateSupport = {
       configured: data.updateSupport?.configured === true,
       sourceUrl: String(data.updateSupport?.sourceUrl || ""),
+      releaseUrl: String(data.updateSupport?.releaseUrl || ""),
     };
     state.appSettings = normalizeAppSettings(data.settings);
   } catch (error) {
     state.updateSupport = {
       configured: false,
       sourceUrl: "",
+      releaseUrl: "",
     };
     state.appSettings = normalizeAppSettings({});
     renderUpdateStatus({
@@ -718,6 +721,7 @@ async function persistAppSettings() {
   state.updateSupport = {
     configured: data.updateSupport?.configured === true,
     sourceUrl: String(data.updateSupport?.sourceUrl || state.updateSupport.sourceUrl || ""),
+    releaseUrl: String(data.updateSupport?.releaseUrl || state.updateSupport.releaseUrl || ""),
   };
   state.appSettings = normalizeAppSettings(data.settings);
   return data;
@@ -725,6 +729,11 @@ async function persistAppSettings() {
 
 function normalizeUpdateResult(result) {
   if (!result || typeof result !== "object") {
+    return null;
+  }
+
+  const sourceUrl = String(result.sourceUrl || "");
+  if (sourceUrl !== state.updateSupport.sourceUrl) {
     return null;
   }
 
@@ -739,6 +748,7 @@ function normalizeUpdateResult(result) {
     assetName: String(result.assetName || ""),
     publishedAt: String(result.publishedAt || ""),
     message: String(result.message || ""),
+    sourceUrl,
   };
 }
 
@@ -781,7 +791,7 @@ function renderUpdateStatus(result) {
   const status = String(result?.status || "muted");
   const checkedAt = String(result?.checkedAt || "");
   const latestVersion = String(result?.latestVersion || "");
-  const releaseUrl = String(result?.releaseUrl || result?.downloadUrl || "");
+  const releaseUrl = String(result?.releaseUrl || result?.downloadUrl || state.updateSupport.releaseUrl || "");
   const message = String(result?.message || "");
   const detailLines = [UPDATE_STATUS_DISCLOSURE];
   if (message) {
@@ -1055,7 +1065,7 @@ async function handleManualUpdateCheck() {
 }
 
 async function handleUpdateReleaseClick(event) {
-  const releaseUrl = String(ui.updateReleaseLink?.href || "").trim();
+  const releaseUrl = String(ui.updateReleaseLink?.getAttribute("href") || "").trim();
   if (!releaseUrl || releaseUrl === "#") {
     event.preventDefault();
     return;
@@ -1127,8 +1137,13 @@ async function checkForUpdates({ automatic = false } = {}) {
     });
     const data = await parseJsonResponse(response);
     state.currentVersion = String(data.currentVersion || state.currentVersion || "");
+    state.updateSupport = {
+      configured: data.updateSupport?.configured === true || state.updateSupport.configured,
+      sourceUrl: String(data.updateSupport?.sourceUrl || state.updateSupport.sourceUrl || ""),
+      releaseUrl: String(data.updateSupport?.releaseUrl || state.updateSupport.releaseUrl || ""),
+    };
     state.appSettings = normalizeAppSettings(data.settings);
-    state.appSettings.updates.lastResult = normalizeUpdateResult(data.result) || state.appSettings.updates.lastResult;
+    state.appSettings.updates.lastResult = normalizeUpdateResult(data.result);
     if (!response.ok || !data.ok) {
       renderUpdateSettings();
       throw new Error(data.error || data.result?.message || `HTTP ${response.status}`);

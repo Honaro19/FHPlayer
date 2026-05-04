@@ -1,16 +1,4 @@
 {
-  "resolve_update_feed_request_url": [
-    {
-      "name": "google_drive_share_link",
-      "source": "https://drive.google.com/file/d/1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV/view?usp=sharing",
-      "expected": "https://drive.google.com/uc?export=download&id=1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV"
-    },
-    {
-      "name": "passthrough_http_url",
-      "source": "https://example.com/update_manifest.json",
-      "expected": "https://example.com/update_manifest.json"
-    }
-  ],
   "manifest_cases": [
     {
       "name": "platform_specific_folder_urls",
@@ -46,6 +34,78 @@
           "releaseUrl": "https://example.com/android",
           "downloadUrl": "https://example.com/FHPlayer-0.1.2.apk",
           "assetName": "FHPlayer-0.1.2.apk"
+        }
+      }
+    },
+    {
+      "name": "github_latest_release_payload",
+      "current_version": "0.1.1",
+      "payload": {
+        "tag_name": "v0.1.2",
+        "name": "FHPlayer 0.1.2",
+        "html_url": "https://github.com/Honaro19/FHPlayer/releases/tag/v0.1.2",
+        "published_at": "2026-04-20T20:31:54Z",
+        "assets": [
+          {
+            "name": "FHPlayer-0.1.2-Setup.exe",
+            "browser_download_url": "https://github.com/Honaro19/FHPlayer/releases/download/v0.1.2/FHPlayer-0.1.2-Setup.exe"
+          },
+          {
+            "name": "FHPlayer-Portable-0.1.2.zip",
+            "browser_download_url": "https://github.com/Honaro19/FHPlayer/releases/download/v0.1.2/FHPlayer-Portable-0.1.2.zip"
+          },
+          {
+            "name": "FHPlayer-0.1.2.apk",
+            "browser_download_url": "https://github.com/Honaro19/FHPlayer/releases/download/v0.1.2/FHPlayer-0.1.2.apk"
+          },
+          {
+            "name": "FHPlayer-0.1.2.aab",
+            "browser_download_url": "https://github.com/Honaro19/FHPlayer/releases/download/v0.1.2/FHPlayer-0.1.2.aab"
+          }
+        ]
+      },
+      "expected": {
+        "desktop": {
+          "status": "available",
+          "latestVersion": "0.1.2",
+          "updateAvailable": true,
+          "releaseUrl": "https://github.com/Honaro19/FHPlayer/releases/tag/v0.1.2",
+          "downloadUrl": "https://github.com/Honaro19/FHPlayer/releases/download/v0.1.2/FHPlayer-0.1.2-Setup.exe",
+          "assetName": "FHPlayer-0.1.2-Setup.exe"
+        },
+        "android": {
+          "status": "available",
+          "latestVersion": "0.1.2",
+          "updateAvailable": true,
+          "releaseUrl": "https://github.com/Honaro19/FHPlayer/releases/tag/v0.1.2",
+          "downloadUrl": "https://github.com/Honaro19/FHPlayer/releases/download/v0.1.2/FHPlayer-0.1.2.apk",
+          "assetName": "FHPlayer-0.1.2.apk"
+        }
+      }
+    },
+    {
+      "name": "github_latest_release_without_assets",
+      "current_version": "0.1.1",
+      "payload": {
+        "tag_name": "v0.1.2",
+        "html_url": "https://github.com/Honaro19/FHPlayer/releases/tag/v0.1.2"
+      },
+      "expected": {
+        "desktop": {
+          "status": "available",
+          "latestVersion": "0.1.2",
+          "updateAvailable": true,
+          "releaseUrl": "https://github.com/Honaro19/FHPlayer/releases/tag/v0.1.2",
+          "downloadUrl": "",
+          "assetName": ""
+        },
+        "android": {
+          "status": "available",
+          "latestVersion": "0.1.2",
+          "updateAvailable": true,
+          "releaseUrl": "https://github.com/Honaro19/FHPlayer/releases/tag/v0.1.2",
+          "downloadUrl": "",
+          "assetName": ""
         }
       }
     },
@@ -91,7 +151,8 @@
       "downloadUrl": null,
       "assetName": "None",
       "publishedAt": " null ",
-      "message": null
+      "message": null,
+      "sourceUrl": "https://api.github.com/repos/Honaro19/FHPlayer/releases/latest"
     },
     "expected": {
       "releaseUrl": "",

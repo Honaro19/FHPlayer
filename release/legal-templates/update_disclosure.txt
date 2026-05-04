@@ -22,10 +22,10 @@ Short status label
 Checks for updates via an external source.
 
 Service-specific wording example
-During the update check, a version file is retrieved from an external Google Drive to determine whether a new version is available.
+During the update check, release metadata is retrieved from GitHub to determine whether a new version is available.
 
-When enabled, the application will automatically check for updates by retrieving a version file from an external Google Drive.
+When enabled, the application will automatically check for updates by retrieving release metadata from GitHub.
 
-You are about to leave this application and open an external Google Drive location where releases are stored.
+You are about to leave this application and open an external GitHub release page where releases are stored.
 
-Checks for updates via external Google Drive.
+Checks for updates via GitHub Releases.

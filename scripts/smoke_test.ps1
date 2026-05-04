@@ -20,12 +20,16 @@ function Write-Step {
 }
 
 function Resolve-PythonCommand {
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    return "py"
+  $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+  if ($pythonCommand) {
+    return $pythonCommand.Source
   }
 
-  if (Get-Command python -ErrorAction SilentlyContinue) {
-    return "python"
+  if (Get-Command py -ErrorAction SilentlyContinue) {
+    $pythonExecutable = (& py -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
+    if ($LASTEXITCODE -eq 0 -and $pythonExecutable -and (Test-Path $pythonExecutable)) {
+      return $pythonExecutable
+    }
   }
 
   throw "Python launcher not found. Install Python 3.10+ first."

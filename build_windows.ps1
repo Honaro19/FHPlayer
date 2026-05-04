@@ -13,12 +13,26 @@ function Wait-BeforeExit {
 }
 
 function Resolve-PythonLauncher {
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    return @("py", "-m", "PyInstaller")
-  }
+  $candidates = @()
+
   if (Get-Command python -ErrorAction SilentlyContinue) {
-    return @("python", "-m", "PyInstaller")
+    $candidates += , @("python", "-m", "PyInstaller")
   }
+  if (Get-Command py -ErrorAction SilentlyContinue) {
+    $candidates += , @("py", "-m", "PyInstaller")
+  }
+
+  foreach ($candidate in $candidates) {
+    $versionOutput = & $candidate[0] $candidate[1] $candidate[2] --version 2>&1
+    if ($LASTEXITCODE -eq 0) {
+      return $candidate
+    }
+  }
+
+  if ($candidates.Count -gt 0) {
+    throw "PyInstaller is not installed for any available Python command. Run: python -m pip install -r requirements-build.txt"
+  }
+
   throw "Python launcher not found. Install Python 3.10+ first."
 }
 
@@ -93,11 +107,6 @@ try {
   }
   if (-not (Test-Path $versionPath)) {
     throw "Missing VERSION file at $versionPath"
-  }
-
-  $versionOutput = & $launcher[0] $launcher[1] $launcher[2] --version 2>&1
-  if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller is not installed for the selected Python. Run: pip install -r requirements-build.txt"
   }
 
   & $launcher[0] $launcher[1] $launcher[2] `

@@ -16,19 +16,6 @@ class UpdateManifestParserTest {
     }
 
     @Test
-    fun `resolve update feed request url matches contract`() {
-        val cases = contract.getJSONArray("resolve_update_feed_request_url")
-        for (index in 0 until cases.length()) {
-            val case = cases.getJSONObject(index)
-            assertEquals(
-                case.getString("expected"),
-                UpdateManifestParser.resolveUpdateFeedRequestUrl(case.getString("source")),
-                case.getString("name"),
-            )
-        }
-    }
-
-    @Test
     fun `parse release payload matches contract fixtures`() {
         val cases = contract.getJSONArray("manifest_cases")
         for (index in 0 until cases.length()) {

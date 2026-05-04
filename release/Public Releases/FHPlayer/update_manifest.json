@@ -10,21 +10,21 @@
                       ],
     "platforms":  {
                       "windows":  {
-                                      "folder_url":  "https://drive.google.com/drive/folders/1jm1sMNGEvUAdXWNPiGaqRJ5pKo6IDZQW?usp=sharing",
-                                      "installer_url":  null,
-                                      "portable_url":  null,
+                                      "folder_url":  "https://github.com/Honaro19/FHPlayer/releases",
+                                      "installer_url":  "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2-Setup.exe",
+                                      "portable_url":  "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-Portable-0.1.2.zip",
                                       "sha256":  {
-                                                     "installer":  "bbd4d4e3cd83672130216336a4a5e7377f2bccb1ce68df679486571a6cf2d679",
-                                                     "portable":  "7c125d43f36ab73ca939b6fba8bd25166d75d830ef39d95e4df4f37dfd1d557d"
+                                                     "installer":  "93387586abaa593e560ddfd34d527493e60d2b6d410b98d14347aa1b5a5f83f8",
+                                                     "portable":  "79fe3c91929e11c23fd2e8a4e7f0dc98afc3398b2943fcf66abe6bea7ac9d2bf"
                                                  }
                                   },
                       "android":  {
-                                      "folder_url":  "https://drive.google.com/drive/folders/1iMRmAQ2dd2zzCSV8IXSWNE-bn_L7oNte?usp=sharing",
-                                      "apk_url":  null,
-                                      "aab_url":  null,
+                                      "folder_url":  "https://github.com/Honaro19/FHPlayer/releases",
+                                      "apk_url":  "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2.apk",
+                                      "aab_url":  "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2.aab",
                                       "sha256":  {
-                                                     "apk":  "d2920cf9d95ac6412740628e973cece6ed1899d26f419b7104b22a02f8218b9a",
-                                                     "aab":  "338ca4321562ccdc9421dfaa6374f802ce9219bc36b24f1f460d619341449e6b"
+                                                     "apk":  "fbe16528c09e376b6c76beb5ebfdeca132007b123562730704e0586f7e12e922",
+                                                     "aab":  "8c1710983399f20d75191f337ed71624925117516d7c72a2c1d0746894077479"
                                                  }
                                   }
                   }

@@ -1,42 +1,44 @@
 # FHPlayer Release Process
 
-This project uses manual Google Drive distribution with:
+This project uses GitHub Releases distribution with:
 
-- one shared public manifest for Windows and Android
-- one stable public folder link for `Windows`
-- one stable public folder link for `Android`
+- the GitHub latest release API as the default update feed for Windows and Android
+- one public GitHub release page opened by the update UI
+- versioned release assets for the Windows installer, Windows portable ZIP, Android APK, and Android AAB
 
 ## Current Public Links
 
-Manifest share link:
+Default update feed:
 
 ```text
-https://drive.google.com/file/d/1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV/view?usp=sharing
+https://api.github.com/repos/Honaro19/FHPlayer/releases/latest
 ```
 
-Manifest raw download URL for the app:
+Releases page:
 
 ```text
-https://drive.google.com/uc?export=download&id=1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV
+https://github.com/Honaro19/FHPlayer/releases
 ```
 
-Windows folder link:
+All releases:
 
 ```text
-https://drive.google.com/drive/folders/1jm1sMNGEvUAdXWNPiGaqRJ5pKo6IDZQW?usp=sharing
+https://github.com/Honaro19/FHPlayer/releases
 ```
 
-Android folder link:
+## Update Feed Strategy
 
-```text
-https://drive.google.com/drive/folders/1iMRmAQ2dd2zzCSV8IXSWNE-bn_L7oNte?usp=sharing
-```
+FHPlayer reads the GitHub latest release JSON by default.
 
-## Manifest Strategy
+The app uses:
 
-FHPlayer uses one manifest file for both platforms.
+- `tag_name` to compare the newest release with the installed app version
+- `html_url` as the release destination opened by the UI
+- `assets[].browser_download_url` as optional direct file metadata
 
-Recommended schema:
+The release tag should use `v<version>`, for example `v0.1.2`. The parser also accepts plain semantic versions such as `0.1.2`.
+
+Custom manifest feeds are still supported for testing or alternate hosting. Recommended custom manifest schema:
 
 ```json
 {
@@ -49,12 +51,12 @@ Recommended schema:
   ],
   "platforms": {
     "windows": {
-      "folder_url": "<stable Windows folder link>",
+      "folder_url": "<release page link>",
       "installer_url": "<optional direct file link>",
       "portable_url": "<optional direct file link>"
     },
     "android": {
-      "folder_url": "<stable Android folder link>",
+      "folder_url": "<release page link>",
       "apk_url": "<optional direct file link>",
       "aab_url": "<optional direct file link>"
     }
@@ -62,7 +64,7 @@ Recommended schema:
 }
 ```
 
-The app uses:
+For custom manifests, the app uses:
 
 - `schema_version` to validate that the manifest matches the expected contract
 - `latest_version` to compare versions
@@ -73,11 +75,10 @@ The app uses:
 
 The following links should stay unchanged between releases:
 
-- the manifest file share link
-- the Windows folder link
-- the Android folder link
+- the GitHub latest release API URL
+- the GitHub releases page URL
 
-Only the contents of the versioned release folders and the JSON content of the manifest should change.
+Each release tag and its uploaded asset files are version-specific.
 
 ## Local Release Layout
 
@@ -101,15 +102,14 @@ release/
 4. Run `.\scripts\prepare_public_release.ps1 -DryRun` and verify the resolved input paths and release notes.
 5. Run `.\scripts\prepare_public_release.ps1` to create the public release folders, portable ZIP, checksums, and manifest.
 6. Optionally run `.\scripts\prepare_public_release.ps1 -VerifyOnly` as a final local consistency check.
-7. Upload the new Windows files into the stable Windows Drive folder structure.
-8. Upload the new Android files into the stable Android Drive folder structure.
-9. Replace the existing manifest file contents in Google Drive so the file ID stays the same.
-10. Test `Check now` from an older Windows build and an older Android build.
-11. Confirm the update dialog opens the correct platform folder link.
+7. Create or update the GitHub Release for tag `v<VERSION>`.
+8. Upload the Windows installer, Windows portable ZIP, Android APK, Android AAB, checksums, and release notes to that GitHub Release.
+9. Test `Check now` from an older Windows build and an older Android build.
+10. Confirm the update dialog opens the correct GitHub release page.
 
 ## Notes
 
-- Do not delete and recreate the manifest file if the public link must stay stable.
-- The app can read the Google Drive share link directly because it converts the file URL to the raw download endpoint internally.
-- The update UI should open the platform folder link, not scrape Google Drive HTML for version detection.
+- The default update path reads GitHub's latest release JSON directly; no separate hosted manifest is required.
+- If you use a custom manifest feed, keep its public URL stable between releases.
+- The update UI should open the release page link, not scrape HTML for version detection.
 - `prepare_public_release.ps1` validates the generated manifest, checksums, and required public files automatically after a normal run.

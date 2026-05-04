@@ -9,7 +9,7 @@
   ],
   "platforms": {
     "windows": {
-      "folder_url": "https://drive.google.com/drive/folders/1jm1sMNGEvUAdXWNPiGaqRJ5pKo6IDZQW?usp=sharing",
+      "folder_url": "https://github.com/Honaro19/FHPlayer/releases",
       "installer_url": null,
       "portable_url": null,
       "sha256": {
@@ -18,7 +18,7 @@
       }
     },
     "android": {
-      "folder_url": "https://drive.google.com/drive/folders/1iMRmAQ2dd2zzCSV8IXSWNE-bn_L7oNte?usp=sharing",
+      "folder_url": "https://github.com/Honaro19/FHPlayer/releases",
       "apk_url": null,
       "aab_url": null,
       "sha256": {

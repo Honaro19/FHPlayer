@@ -25,10 +25,12 @@ HOST = "127.0.0.1"
 PORT = 8765
 BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 STATIC_DIR = BASE_DIR / "static"
-DEFAULT_UPDATE_FEED_URL = "https://drive.google.com/file/d/1yB-YWh4vKyxgVeYKXK8raaCTsKBT70JV/view?usp=sharing"
+DEFAULT_UPDATE_FEED_URL = "https://api.github.com/repos/Honaro19/FHPlayer/releases/latest"
+DEFAULT_RELEASE_PAGE_URL = "https://github.com/Honaro19/FHPlayer/releases"
 UPDATE_FEED_URL = os.environ.get("FHPLAYER_UPDATE_FEED_URL", DEFAULT_UPDATE_FEED_URL)
+RELEASE_PAGE_URL = os.environ.get("FHPLAYER_RELEASE_PAGE_URL", DEFAULT_RELEASE_PAGE_URL)
 VERSION_PATTERN = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
-GOOGLE_DRIVE_FILE_PATH_PATTERN = re.compile(r"^/file/d/([A-Za-z0-9_-]+)(?:/|$)")
+UPDATE_URL_OPENER = urlrequest.build_opener(urlrequest.ProxyHandler({}))
 
 
 def read_app_version() -> str:
@@ -88,6 +90,10 @@ def normalize_update_result(result: Any) -> dict[str, Any] | None:
     if not isinstance(result, dict):
         return None
 
+    source_url = normalize_optional_string(result.get("sourceUrl"))
+    if source_url != UPDATE_FEED_URL:
+        return None
+
     return {
         "status": normalize_optional_string(result.get("status")) or "unknown",
         "checkedAt": normalize_optional_string(result.get("checkedAt")),
@@ -99,6 +105,7 @@ def normalize_update_result(result: Any) -> dict[str, Any] | None:
         "assetName": normalize_optional_string(result.get("assetName")),
         "publishedAt": normalize_optional_string(result.get("publishedAt")),
         "message": normalize_optional_string(result.get("message")),
+        "sourceUrl": source_url,
     }
 
 
@@ -157,6 +164,7 @@ def build_settings_payload() -> dict[str, Any]:
         "updateSupport": {
             "configured": bool(UPDATE_FEED_URL),
             "sourceUrl": UPDATE_FEED_URL,
+            "releaseUrl": RELEASE_PAGE_URL,
         },
     }
 
@@ -182,6 +190,18 @@ def require_manifest_schema_version(payload: dict[str, Any]) -> None:
             normalized_schema_version = None
     if normalized_schema_version != 1:
         raise ValueError("Update manifest schema_version must be 1")
+
+
+def is_github_release_payload(payload: dict[str, Any]) -> bool:
+    html_url = get_string_value(payload, "html_url")
+    tag_name = get_string_value(payload, "tag_name")
+    parsed_url = urlparse(html_url)
+    return (
+        parsed_url.scheme == "https"
+        and parsed_url.netloc == "github.com"
+        and "/releases/tag/" in parsed_url.path
+        and bool(tag_name)
+    )
 
 
 def first_non_blank(*values: Any) -> str:
@@ -234,27 +254,6 @@ def asset_name_from_url(url: str) -> str:
     return path.split("/")[-1]
 
 
-def resolve_update_feed_request_url(source_url: str) -> str:
-    normalized_source_url = str(source_url or "").strip()
-    if not normalized_source_url:
-        return ""
-
-    parsed = urlparse(normalized_source_url)
-    if parsed.netloc not in {"drive.google.com", "www.drive.google.com"}:
-        return normalized_source_url
-
-    match = GOOGLE_DRIVE_FILE_PATH_PATTERN.match(parsed.path)
-    if match:
-        return f"https://drive.google.com/uc?export=download&id={match.group(1)}"
-
-    query = parse_qs(parsed.query)
-    file_id = first_non_blank(*(query.get("id") or []))
-    if file_id:
-        return f"https://drive.google.com/uc?export=download&id={file_id}"
-
-    return normalized_source_url
-
-
 def select_release_asset(assets: Any, platform: str) -> tuple[str, str]:
     if not isinstance(assets, list):
         return "", ""
@@ -284,7 +283,8 @@ def parse_release_payload(payload: Any, platform: str, current_version: str | No
     if not isinstance(payload, dict):
         raise ValueError("Update feed returned an invalid JSON payload")
 
-    require_manifest_schema_version(payload)
+    if not is_github_release_payload(payload):
+        require_manifest_schema_version(payload)
     normalized_current_version = normalize_optional_string(current_version) or APP_VERSION
     normalized_platform = normalize_update_platform(platform)
     platform_payload = extract_platform_payload(payload, normalized_platform)
@@ -349,16 +349,16 @@ def fetch_update_result(platform: str) -> dict[str, Any]:
             "currentVersion": APP_VERSION,
             "latestVersion": "",
             "updateAvailable": False,
-            "releaseUrl": "",
+            "releaseUrl": RELEASE_PAGE_URL,
             "downloadUrl": "",
             "assetName": "",
             "publishedAt": "",
             "message": "No update feed is configured.",
+            "sourceUrl": UPDATE_FEED_URL,
         }
 
-    request_url = resolve_update_feed_request_url(UPDATE_FEED_URL)
     request = urlrequest.Request(
-        request_url,
+        UPDATE_FEED_URL,
         headers={
             "Accept": "application/json",
             "User-Agent": f"FHPlayer/{APP_VERSION}",
@@ -367,8 +367,36 @@ def fetch_update_result(platform: str) -> dict[str, Any]:
     )
 
     try:
-        with urlrequest.urlopen(request, timeout=5.0) as response:
+        with UPDATE_URL_OPENER.open(request, timeout=5.0) as response:
             body = response.read().decode("utf-8")
+    except urlerror.HTTPError as exc:
+        if UPDATE_FEED_URL == DEFAULT_UPDATE_FEED_URL and exc.code == HTTPStatus.NOT_FOUND:
+            return {
+                "status": "unavailable",
+                "checkedAt": utc_now_iso(),
+                "currentVersion": APP_VERSION,
+                "latestVersion": "",
+                "updateAvailable": False,
+                "releaseUrl": RELEASE_PAGE_URL,
+                "downloadUrl": "",
+                "assetName": "",
+                "publishedAt": "",
+                "message": "No GitHub release has been published yet.",
+                "sourceUrl": UPDATE_FEED_URL,
+            }
+        return {
+            "status": "error",
+            "checkedAt": utc_now_iso(),
+            "currentVersion": APP_VERSION,
+            "latestVersion": "",
+            "updateAvailable": False,
+            "releaseUrl": RELEASE_PAGE_URL,
+            "downloadUrl": "",
+            "assetName": "",
+            "publishedAt": "",
+            "message": str(exc),
+            "sourceUrl": UPDATE_FEED_URL,
+        }
     except Exception as exc:
         return {
             "status": "error",
@@ -376,16 +404,19 @@ def fetch_update_result(platform: str) -> dict[str, Any]:
             "currentVersion": APP_VERSION,
             "latestVersion": "",
             "updateAvailable": False,
-            "releaseUrl": "",
+            "releaseUrl": RELEASE_PAGE_URL,
             "downloadUrl": "",
             "assetName": "",
             "publishedAt": "",
             "message": str(exc),
+            "sourceUrl": UPDATE_FEED_URL,
         }
 
     try:
         payload = json.loads(body)
-        return parse_release_payload(payload, platform)
+        result = parse_release_payload(payload, platform)
+        result["sourceUrl"] = UPDATE_FEED_URL
+        return result
     except (ValueError, json.JSONDecodeError) as exc:
         return {
             "status": "error",
@@ -393,11 +424,12 @@ def fetch_update_result(platform: str) -> dict[str, Any]:
             "currentVersion": APP_VERSION,
             "latestVersion": "",
             "updateAvailable": False,
-            "releaseUrl": "",
+            "releaseUrl": RELEASE_PAGE_URL,
             "downloadUrl": "",
             "assetName": "",
             "publishedAt": "",
             "message": str(exc),
+            "sourceUrl": UPDATE_FEED_URL,
         }
 
 
@@ -1231,6 +1263,7 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
                 "updateSupport": {
                     "configured": bool(UPDATE_FEED_URL),
                     "sourceUrl": UPDATE_FEED_URL,
+                    "releaseUrl": RELEASE_PAGE_URL,
                 },
             }
         )
@@ -1252,6 +1285,11 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
                 "currentVersion": APP_VERSION,
                 "result": update_result,
                 "settings": saved_settings,
+                "updateSupport": {
+                    "configured": bool(UPDATE_FEED_URL),
+                    "sourceUrl": UPDATE_FEED_URL,
+                    "releaseUrl": RELEASE_PAGE_URL,
+                },
             },
             status=HTTPStatus.OK if update_result.get("status") != "error" else HTTPStatus.BAD_GATEWAY,
         )
