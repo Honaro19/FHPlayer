@@ -30,6 +30,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowCompat
 import android.widget.FrameLayout
 import android.widget.Toast
+import java.io.ByteArrayInputStream
 import java.io.IOException
 
 class MainActivity : ComponentActivity() {
@@ -41,6 +42,7 @@ class MainActivity : ComponentActivity() {
     private var fullscreenView: View? = null
     private var fullscreenCallback: CustomViewCallback? = null
     private var hasRetriedLocalLoad = false
+    private val allowedExternalWebViewHosts = setOf("github.com")
     private val fileChooserLauncher: ActivityResultLauncher<Intent> =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
             handleFileChooserResult(result.resultCode, result.data)
@@ -81,16 +83,61 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView() {
+        WebView.setWebContentsDebuggingEnabled(false)
+
         webView.settings.apply {
+            // JavaScript and DOM storage are required for the FHPlayer web UI.
             javaScriptEnabled = true
             domStorageEnabled = true
+
+            // WebView isolation / hardening: FHPlayer only serves its own local UI.
             allowFileAccess = false
-            allowContentAccess = true
+            allowContentAccess = false
+            javaScriptCanOpenWindowsAutomatically = false
+            setSupportMultipleWindows(false)
             mediaPlaybackRequiresUserGesture = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            cacheMode = WebSettings.LOAD_NO_CACHE
+            saveFormData = false
+            setGeolocationEnabled(false)
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                safeBrowsingEnabled = true
+            }
+
+            @Suppress("DEPRECATION")
+            allowFileAccessFromFileURLs = false
+
+            @Suppress("DEPRECATION")
+            allowUniversalAccessFromFileURLs = false
         }
 
+        webView.clearCache(true)
+        webView.clearHistory()
+        webView.removeJavascriptInterface("searchBoxJavaBridge_")
+        webView.removeJavascriptInterface("accessibility")
+        webView.removeJavascriptInterface("accessibilityTraversal")
+
         webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                return handleWebViewNavigation(request.url)
+            }
+
+            @Deprecated("Deprecated in Android API 24, kept for older WebView implementations.")
+            override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean {
+                return handleWebViewNavigation(Uri.parse(url))
+            }
+
+            override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+                val requestUri = request.url
+                if (isNetworkUri(requestUri) && !isAllowedWebViewUri(requestUri)) {
+                    AppLogger.warn(applicationContext, "Blocked WebView resource request to ${requestUri}.")
+                    return emptyBlockedWebViewResponse()
+                }
+
+                return super.shouldInterceptRequest(view, request)
+            }
+
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 super.onPageStarted(view, url, favicon)
                 AppLogger.info(applicationContext, "WebView started loading ${url.orEmpty()}.")
@@ -206,6 +253,83 @@ class MainActivity : ComponentActivity() {
                     false
                 }
             }
+        }
+    }
+
+    private fun handleWebViewNavigation(uri: Uri?): Boolean {
+        if (isAllowedWebViewUri(uri)) {
+            return false
+        }
+
+        if (openExternalUrlSafely(uri)) {
+            return true
+        }
+
+        AppLogger.warn(applicationContext, "Blocked WebView navigation to ${uri?.toString().orEmpty()}.")
+        return true
+    }
+
+    private fun isAllowedWebViewUri(uri: Uri?): Boolean {
+        if (uri == null) {
+            return false
+        }
+
+        val baseUri = Uri.parse(LocalHttpServer.baseUrl())
+        val scheme = uri.scheme?.lowercase() ?: return false
+        val host = uri.host?.lowercase() ?: return false
+        val baseScheme = baseUri.scheme?.lowercase() ?: return false
+        val baseHost = baseUri.host?.lowercase() ?: return false
+
+        val allowedLocalHosts = setOf(baseHost, "127.0.0.1", "localhost")
+
+        return scheme == baseScheme &&
+            host in allowedLocalHosts &&
+            uri.effectivePort() == baseUri.effectivePort()
+    }
+
+    private fun isNetworkUri(uri: Uri?): Boolean {
+        val scheme = uri?.scheme?.lowercase() ?: return false
+        return scheme == "http" || scheme == "https"
+    }
+
+    private fun Uri.effectivePort(): Int =
+        if (port != -1) {
+            port
+        } else {
+            when (scheme?.lowercase()) {
+                "http" -> 80
+                "https" -> 443
+                else -> -1
+            }
+        }
+
+    private fun emptyBlockedWebViewResponse(): WebResourceResponse =
+        WebResourceResponse(
+            "text/plain",
+            "utf-8",
+            ByteArrayInputStream(ByteArray(0)),
+        )
+
+    private fun openExternalUrlSafely(uri: Uri?): Boolean {
+        if (uri == null) {
+            return false
+        }
+
+        val scheme = uri.scheme?.lowercase() ?: return false
+        val host = uri.host?.lowercase() ?: return false
+        if (scheme != "https" || host !in allowedExternalWebViewHosts) {
+            return false
+        }
+
+        return try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
+            true
+        } catch (exception: ActivityNotFoundException) {
+            AppLogger.warn(applicationContext, "No external browser is available for $uri.", exception)
+            false
+        } catch (exception: SecurityException) {
+            AppLogger.warn(applicationContext, "External navigation was blocked for $uri.", exception)
+            false
         }
     }
 

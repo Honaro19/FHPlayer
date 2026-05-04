@@ -1300,6 +1300,36 @@ class LocalHttpServer(
         return JSONObject(text)
     }
 
+    private fun contentSecurityPolicy(): String {
+        val localBaseUrl = baseUrl()
+        val localhostBaseUrl = localBaseUrl.replace("127.0.0.1", "localhost")
+        return listOf(
+            "default-src 'self'",
+            "base-uri 'none'",
+            "object-src 'none'",
+            "frame-ancestors 'none'",
+            "form-action 'self'",
+            "script-src 'self'",
+            "style-src 'self' 'unsafe-inline'",
+            "img-src 'self' data: blob:",
+            "font-src 'self' data:",
+            "media-src 'self' blob: $localBaseUrl $localhostBaseUrl",
+            "connect-src 'self' $localBaseUrl $localhostBaseUrl",
+            "worker-src 'self' blob:",
+            "manifest-src 'self'",
+        ).joinToString("; ")
+    }
+
+    private fun StringBuilder.appendSecurityHeaders() {
+        append("Content-Security-Policy: ")
+        append(contentSecurityPolicy())
+        append("\r\n")
+        append("X-Content-Type-Options: nosniff\r\n")
+        append("Referrer-Policy: no-referrer\r\n")
+        append("Permissions-Policy: camera=(), microphone=(), geolocation=()\r\n")
+        append("X-Frame-Options: DENY\r\n")
+    }
+
     private fun respondJson(output: OutputStream, statusCode: Int, payload: JSONObject) {
         respondBytes(
             output,
@@ -1324,6 +1354,7 @@ class LocalHttpServer(
                 append(body.size)
                 append("\r\n")
                 append("Cache-Control: no-store\r\n")
+                appendSecurityHeaders()
                 append("Connection: close\r\n")
                 append("\r\n")
             }
@@ -1358,6 +1389,7 @@ class LocalHttpServer(
                 append("\r\n")
                 append("Accept-Ranges: bytes\r\n")
                 append("Cache-Control: no-store\r\n")
+                appendSecurityHeaders()
                 if (range != null) {
                     append("Content-Range: bytes ")
                     append(start)
@@ -1418,6 +1450,7 @@ class LocalHttpServer(
                 append("\r\n")
                 append("Accept-Ranges: bytes\r\n")
                 append("Cache-Control: no-store\r\n")
+                appendSecurityHeaders()
                 if (range != null) {
                     append("Content-Range: bytes ")
                     append(start)
@@ -1481,6 +1514,7 @@ class LocalHttpServer(
                 append("Content-Length: 0\r\n")
                 append("Accept-Ranges: bytes\r\n")
                 append("Cache-Control: no-store\r\n")
+                appendSecurityHeaders()
                 append("Connection: close\r\n")
                 append("\r\n")
             }
