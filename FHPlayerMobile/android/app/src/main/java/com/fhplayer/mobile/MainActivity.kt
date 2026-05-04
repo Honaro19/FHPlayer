@@ -86,7 +86,10 @@ class MainActivity : ComponentActivity() {
         WebView.setWebContentsDebuggingEnabled(false)
 
         webView.settings.apply {
-            // JavaScript and DOM storage are required for the FHPlayer web UI.
+            // JavaScript and DOM storage are required for the FHPlayer local web UI.
+            // The WebView is isolated to trusted local FHPlayer URLs, blocks external navigation/subresources,
+            // disables file/content access, and is protected by CSP headers from LocalHttpServer.
+            // codeql[java/android/websettings-javascript-enabled]
             javaScriptEnabled = true
             domStorageEnabled = true
 
