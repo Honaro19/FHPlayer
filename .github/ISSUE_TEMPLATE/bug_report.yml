@@ -1,0 +1,77 @@
+name: 🐛 Bug Report
+description: Report a problem or unexpected behavior in FHPlayer
+title: "[BUG] "
+labels: ["bug"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill out the information below as accurately as possible.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Which version of FHPlayer are you using?
+      placeholder: e.g. 0.1.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_type
+    attributes:
+      label: Installation Type
+      options:
+        - Setup (Installer)
+        - Portable Version
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      description: e.g. Windows 10 / Windows 11
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can the issue be reproduced?
+      placeholder: |
+        1. Start the program
+        2. Click on ...
+        3. ...
+        4. Error occurs
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Screenshots
+      description: Attach logs or screenshots if available
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Information
