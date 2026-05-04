@@ -10,10 +10,12 @@ Before using this software, it is recommended to back up important data.
 
 - Load multiple videos with matching `funscript` files as a playlist
 - Play the playlist sequentially or randomly
+- Save and load `.fhplaylist` files with media paths, playlist order, playback mode, funscript data, and per-entry Lovense settings
 - Read `funscript` files and display all contained actions
 - Choose between `Lovense live` and `Lovense test` per playlist entry
 - Connect to Lovense over configurable protocol, host/IP, and port
-- Store multiple Lovense connection profiles per playlist entry for different users or hosts
+- Store multiple Lovense user profiles globally in the playlist and activate different users per video
+- Keep separate Lovense rule scripts per user and playlist entry in `Lovense live` and `Lovense test`
 - Detect one or more connected Lovense devices per user profile with their supported capabilities
 - Validate Lovense rules so untargeted actions are shared-compatible and targeted actions match the addressed devices
 - Run multiple Lovense actions at the same time on every selected device when their shared functions allow it
@@ -21,7 +23,7 @@ Before using this software, it is recommended to back up important data.
 - Show live rule validation, detected device types, and allowed parallel action count in the UI
 - Test Lovense rules locally with simulated devices directly in Lovense test mode
 - Read optional defaults directly from the `funscript`
-- Use dry-run mode to test without sending real Lovense requests
+- Pause Lovense live playback quickly with the player overlay stop/resume control
 - No artificial 1-second limit between triggers: closely spaced actions are sent to the backend in parallel
 - View a log of triggered Lovense requests and responses
 
@@ -50,20 +52,19 @@ On startup FHPlayer creates a managed library under:
 2. Wait for the browser window to open at `http://127.0.0.1:8765`.
 3. Select one or more video files.
 4. Select the matching `.funscript` or `.json` files.
-5. Leave `Dry Run` enabled for the first test.
-6. Configure `Lovense live` or `Lovense test`.
-7. Click `Add to playlist`.
-8. Click `Enable execution`.
-9. Load the playlist entry and start the video.
+5. Configure `Lovense live` or `Lovense test`.
+6. Click `Add to playlist`.
+7. Optional: click `Save to Library` to copy selected media into the managed library and save the current playlist into `Exports`.
+8. Load the playlist entry and start the video.
 
 ### Android
 
 1. Install `installers\android\FHPlayer-<version>-debug.apk` for debug use or the release APK once you have one.
 2. Start the app.
 3. Select videos and then the matching `.funscript` or `.json` files through the Android document picker.
-4. Keep `Dry Run` enabled for the first test.
-5. Configure `Lovense live` or `Lovense test`.
-6. Add the entry to the playlist and start playback.
+4. Configure `Lovense live` or `Lovense test`.
+5. Add the entry to the playlist and start playback.
+6. Optional: click `Save to Library` to copy selected media into the app-managed library and save the current playlist into `Exports`.
 
 ### First Lovense Connection
 
@@ -435,13 +436,16 @@ npm run test:rules
 4. Choose `Lovense live` or `Lovense test`.
 5. For `Lovense live`, select or create a connection profile, enter host settings, click `Detect devices`, and select the devices you want to use.
 6. For `Lovense test`, select one or more simulated devices from the same device list.
-7. Review or edit the rule script.
+7. Review or edit the rule script for the selected Lovense user. Each user profile has its own script for the selected playlist entry.
 8. Click `Add to playlist`.
 9. Use `Save selected entry` after later changes to the selected playlist item.
-10. Use `Save to funscript` if you want to store the current FHPlayer settings back into the script file.
-11. Choose `Sequential` or `Random` playlist mode.
-12. Leave `Dry Run` enabled until the setup behaves correctly.
-13. Click `Enable execution`, then load and play the video.
+10. Click `Save to Library` to copy selected videos and funscripts into the managed library and store the full playlist as a `.fhplaylist` file in `Exports`.
+11. Use `Load playlist` to restore a saved playlist. Saved media paths are used first; managed-library filenames and embedded funscript data are used as fallbacks.
+12. Use `Save to funscript` only for the funscript content itself. Playlist-only Lovense rules are not written into `.funscript` files.
+13. Choose `Sequential` or `Random` playlist mode.
+14. Load and play the video. Rule scripts execute automatically during playback.
+
+Saved playlists keep the video and funscript source paths, global Lovense users/device profiles, active users per entry, and each user's per-entry rule script. The same `.funscript` can therefore appear in multiple saved playlists while each playlist uses different Lovense programs.
 
 ## Common Problems
 
@@ -465,10 +469,9 @@ npm run test:rules
 
 ### Playback triggers nothing
 
-- Make sure `Enable execution` is active.
-- Check whether `Dry Run` is still enabled.
 - Verify that at least one real or simulated device is selected.
 - Review the live rule validation status before starting playback.
+- If the player overlay shows `RESUME`, click it to continue Lovense live execution after an emergency stop.
 
 ### The app starts but the browser UI does not load correctly
 
@@ -590,7 +593,7 @@ if pos >= 15 then delay(250) + [Nora] vibrate(level, 900) + [Max 2] pump(2)
 else stop()
 ```
 
-FHPlayer validates the selected rule script against the active live device selection or simulated test selection before saving or playback. The UI shows:
+FHPlayer validates the selected user's rule script against that user's active live device selection, or against that user's simulated test selection in `Lovense test`. Before saving a playlist entry, all active users are validated. Durations on action commands must be `0` or at least `200` ms; values between `1` and `199` ms are rejected after variables are resolved. The UI shows:
 
 - detected device types
 - shared capabilities plus the capabilities of each selected device
@@ -598,13 +601,15 @@ FHPlayer validates the selected rule script against the active live device selec
 - unique action ranges for the current selection without duplicate entries
 - the available device selectors as `Name [ID]`
 
-Lovense connection settings are stored per playlist entry, including:
+Lovense user settings are stored globally in the playlist, including:
 
-- one or more live connection profiles
-- the selected live connection profile
-- one or more selected devices per live connection
-- one or more selected simulated devices for test mode
+- one or more user profiles
+- the selected profile
+- one or more selected live devices per user
+- one or more selected simulated devices per user for `Lovense test`
 - shared detected capabilities per live connection
+
+Each playlist entry stores which global users are active and the rule script for each active user. The playlist list shows the available Lovense users for live and test entries; use those checkboxes to decide which users are active for each video.
 
 ## Funscript Defaults
 
@@ -632,72 +637,12 @@ If the form still contains the default values, FHPlayer automatically uses these
 
 When you select one or more `funscript` files in the form, FHPlayer also applies the saved metadata from the first selected script to the current UI immediately. This avoids overwriting saved values accidentally before adding the entry to the playlist.
 
-FHPlayer can also write the current entry settings back into the funscript under `metadata.fhplayer`:
-
-```json
-{
-  "metadata": {
-    "fhplayer": {
-      "schemaVersion": 2,
-      "executionMode": "lovense-live",
-      "rulesText": "if pos >= 15 then vibrate(10)\nelse stop()",
-      "lovense": {
-        "selectedConnectionId": "user-1",
-        "connections": [
-          {
-            "id": "user-1",
-            "label": "User 1",
-            "scheme": "https",
-            "host": "127.0.0.1",
-            "port": "30010",
-            "platformName": "FHPlayer",
-            "selectedToys": [
-              {
-                "id": "xxxx",
-                "name": "Nora",
-                "nickName": "Nora",
-                "type": "Nora",
-                "fullFunctionNames": ["Vibrate", "Rotate"]
-              },
-              {
-                "id": "yyyy",
-                "name": "Max 2",
-                "nickName": "Max 2",
-                "type": "Max 2",
-                "fullFunctionNames": ["Vibrate", "Pump"]
-              }
-            ],
-            "toyId": "xxxx",
-            "toyName": "Nora",
-            "toyType": "Nora",
-            "capabilities": ["Vibrate"]
-          }
-        ],
-        "testSelectedToys": [
-          {
-            "id": "sim-nora",
-            "name": "Nora Simulator",
-            "nickName": "Nora Simulator",
-            "type": "Nora",
-            "fullFunctionNames": ["Vibrate", "Rotate"]
-          }
-        ],
-        "testToyId": "sim-nora",
-        "testToyName": "Nora Simulator",
-        "testToyType": "Nora",
-        "testCapabilities": ["Vibrate", "Rotate"]
-      }
-    }
-  }
-}
-```
-
-When the browser supports the File System Access API, `Save to funscript` lets you overwrite the target file directly. Otherwise FHPlayer falls back to downloading the updated `.funscript` file.
+New Lovense rule scripts and device/profile assignments are saved in `.fhplaylist` files, not in `.funscript` files. When the browser supports the File System Access API, `Save to funscript` lets you overwrite the target funscript directly, but FHPlayer strips playlist-only rule metadata from that output. Otherwise FHPlayer falls back to downloading the cleaned `.funscript` file.
 
 ## Safety
 
 FHPlayer sends exactly the Lovense actions defined by your rules. Therefore:
 
-- test with `Dry Run` first
+- test rule behavior in `Lovense test` mode first
 - only use trusted `funscript` files
 - verify live Lovense rules before using them with real devices

@@ -8,9 +8,11 @@ const DEFAULT_LOVENSE_CONNECTION = {
   port: "30010",
   platformName: "FHPlayer",
   selectedToys: [],
+  rulesText: DEFAULT_RULES_TEXT,
 };
 const DEFAULT_LOVENSE_CONFIG = {
   selectedConnectionId: DEFAULT_LOVENSE_CONNECTION.id,
+  activeConnectionIds: [DEFAULT_LOVENSE_CONNECTION.id],
   connections: [{ ...DEFAULT_LOVENSE_CONNECTION }],
   testSelectedToys: [
     {
@@ -24,6 +26,15 @@ const DEFAULT_LOVENSE_CONFIG = {
 };
 const ACCEPTED_FUNSCRIPT_EXTENSIONS = new Set(["funscript", "json"]);
 const ACCEPTED_FUNSCRIPT_MIME_TYPES = new Set(["application/json", "text/json"]);
+const ACCEPTED_VIDEO_EXTENSIONS = new Set(["mp4", "webm", "m4v", "mov", "mkv", "avi"]);
+const PLAYLIST_SCHEMA_VERSION = 1;
+const PLAYLIST_FILE_EXTENSION = ".fhplaylist";
+const PLAYLIST_MIME_TYPE = "application/json";
+const PLAYER_PLAY_ICON_HTML = "&#9654;";
+const PLAYER_PAUSE_ICON_HTML = "&#10074;&#10074;";
+const PLAYER_SKIP_SECONDS = 10;
+const PLAYER_CONTROLS_HIDE_DELAY_MS = 1600;
+const MIN_LOVENSE_ACTION_DURATION_MS = 200;
 const LOVENSE_ACTIONS = {
   all: {
     apiName: "All",
@@ -179,8 +190,8 @@ const LOVENSE_SHORT_CAPABILITY_MAP = {
   o: "Oscillate",
 };
 const LOVENSE_TYPE_CAPABILITY_HINTS = [
-  { match: /solace\s*pro/i, capabilities: ["Vibrate", "Thrusting", "Suction", "Stroke"] },
-  { match: /solace/i, capabilities: ["Vibrate", "Thrusting", "Suction"] },
+  { match: /solace\s*pro/i, capabilities: ["Thrusting", "Stroke"] },
+  { match: /solace/i, capabilities: ["Thrusting", "Depth"] },
   { match: /\bmax(?:\s*2)?\b/i, capabilities: ["Air"] },
   { match: /\bnora\b/i, capabilities: ["Vibrate", "Rotate"] },
   { match: /\b(?:edge(?:\s*2)?|lapis)\b/i, capabilities: ["Vibrate2"] },
@@ -224,7 +235,7 @@ const SIMULATED_TOYS = [
     name: "Solace Simulator",
     nickName: "Solace Simulator",
     type: "Solace",
-    fullFunctionNames: ["Vibrate", "Thrusting", "Suction"],
+    fullFunctionNames: ["Thrusting", "Depth"],
   },
 ];
 const LEGAL_NOTICE_HTML = `
@@ -256,11 +267,18 @@ const state = {
   nextActionIndex: 0,
   lastTriggeredIndex: null,
   highlightedActionIndex: null,
-  armed: false,
+  ruleExecutionPaused: false,
+  suppressNextPauseStop: false,
+  lovensePanelCollapsed: false,
   rafId: null,
+  playerControlsHideTimer: null,
+  playerControlsVisible: true,
   logCount: 0,
   pendingExecutions: 0,
   playbackMode: "sequential",
+  playlistFileName: "",
+  playlistLibraryFileName: "",
+  playlistLovense: normalizeLovenseConfig(DEFAULT_LOVENSE_CONFIG),
   currentVersion: "",
   backendCapabilities: {
     lovense: true,
@@ -283,6 +301,7 @@ const state = {
       showDiagnostics: true,
       showFunscriptOverview: true,
       showExecutionLog: true,
+      showUpdates: true,
     },
     legal: {
       lastAcknowledgedVersion: "",
@@ -316,7 +335,21 @@ const state = {
     capabilities: {
       import: false,
       reveal: false,
+      serve: false,
+      localFiles: false,
+      delete: false,
     },
+  },
+  pendingLibrarySelection: {
+    video: null,
+    funscript: null,
+  },
+  libraryFileModal: {
+    files: [],
+    resolver: null,
+    mode: "select",
+    deleteConfig: null,
+    busy: false,
   },
   detectedToysByConnection: {},
   formLovense: normalizeLovenseConfig(DEFAULT_LOVENSE_CONFIG),
@@ -337,11 +370,13 @@ const ui = {
   showDiagnosticsToggle: document.getElementById("show-diagnostics-toggle"),
   showFunscriptOverviewToggle: document.getElementById("show-funscript-overview-toggle"),
   showExecutionLogToggle: document.getElementById("show-execution-log-toggle"),
+  showUpdatesToggle: document.getElementById("show-updates-toggle"),
   updateVersionLabel: document.getElementById("update-version-label"),
   updateAutoCheck: document.getElementById("update-auto-check"),
   checkUpdatesButton: document.getElementById("check-updates-button"),
   updateReleaseLink: document.getElementById("update-release-link"),
   updateStatus: document.getElementById("update-status"),
+  updatePanel: document.getElementById("update-panel"),
   legalNoticeModal: document.getElementById("legal-notice-modal"),
   legalNoticeBody: document.getElementById("legal-notice-body"),
   legalNoticeStatus: document.getElementById("legal-notice-status"),
@@ -350,29 +385,58 @@ const ui = {
   confirmationModalTitle: document.getElementById("confirmation-modal-title"),
   confirmationModalSubtitle: document.getElementById("confirmation-modal-subtitle"),
   confirmationModalBody: document.getElementById("confirmation-modal-body"),
+  confirmationModalInputRow: document.getElementById("confirmation-modal-input-row"),
+  confirmationModalInputLabel: document.getElementById("confirmation-modal-input-label"),
+  confirmationModalInput: document.getElementById("confirmation-modal-input"),
   confirmationModalCheckboxRow: document.getElementById("confirmation-modal-checkbox-row"),
   confirmationModalCheckboxLabel: document.getElementById("confirmation-modal-checkbox-label"),
   confirmationModalCheckbox: document.getElementById("confirmation-modal-checkbox"),
   confirmationModalStatus: document.getElementById("confirmation-modal-status"),
   confirmationModalCancelButton: document.getElementById("confirmation-modal-cancel-button"),
   confirmationModalConfirmButton: document.getElementById("confirmation-modal-confirm-button"),
+  libraryFileModal: document.getElementById("library-file-modal"),
+  libraryFileModalTitle: document.getElementById("library-file-modal-title"),
+  libraryFileModalSubtitle: document.getElementById("library-file-modal-subtitle"),
+  libraryFileModalStatus: document.getElementById("library-file-modal-status"),
+  libraryFileModalList: document.getElementById("library-file-modal-list"),
+  libraryFileModalCancelButton: document.getElementById("library-file-modal-cancel-button"),
   diagnosticsPanel: document.getElementById("diagnostics-panel"),
   diagnosticsStatus: document.getElementById("diagnostics-status"),
   diagnosticsPaths: document.getElementById("diagnostics-paths"),
   diagnosticsLog: document.getElementById("diagnostics-log"),
+  copyDiagnosticsLogButton: document.getElementById("copy-diagnostics-log-button"),
   currentEntryTitle: document.getElementById("current-entry-title"),
   currentEntryMeta: document.getElementById("current-entry-meta"),
   currentTime: document.getElementById("current-time"),
   nextAction: document.getElementById("next-action"),
   lastAction: document.getElementById("last-action"),
+  playerShell: document.getElementById("player-shell"),
+  playerPreviousButton: document.getElementById("player-previous-button"),
+  playerRewindButton: document.getElementById("player-rewind-button"),
+  playerPlayButton: document.getElementById("player-play-button"),
+  playerPlayIcon: document.getElementById("player-play-icon"),
+  playerPlayLabel: document.getElementById("player-play-label"),
+  playerForwardButton: document.getElementById("player-forward-button"),
+  playerNextButton: document.getElementById("player-next-button"),
+  playerSeek: document.getElementById("player-seek"),
+  playerCurrentTime: document.getElementById("player-current-time"),
+  playerDuration: document.getElementById("player-duration"),
+  playerMuteButton: document.getElementById("player-mute-button"),
+  playerVolume: document.getElementById("player-volume"),
+  playerFullscreenButton: document.getElementById("player-fullscreen-button"),
+  playerLovenseStopButton: document.getElementById("player-lovense-stop-button"),
   video: document.getElementById("video"),
   videoFiles: document.getElementById("video-files"),
   funscriptFiles: document.getElementById("funscript-files"),
   executionMode: document.getElementById("execution-mode"),
-  dryRun: document.getElementById("dry-run"),
   playlistMode: document.getElementById("playlist-mode"),
+  lovenseCard: document.getElementById("lovense-card"),
+  lovensePanelBody: document.getElementById("lovense-panel-body"),
+  toggleLovensePanelButton: document.getElementById("toggle-lovense-panel-button"),
+  lovensePanelChevron: document.getElementById("lovense-panel-chevron"),
   lovenseConfig: document.getElementById("lovense-config"),
   lovenseLiveConfig: document.getElementById("lovense-live-config"),
+  lovenseActiveConnections: document.getElementById("lovense-active-connections"),
   lovenseConnectionSelect: document.getElementById("lovense-connection-select"),
   lovenseConnectionName: document.getElementById("lovense-connection-name"),
   lovenseScheme: document.getElementById("lovense-scheme"),
@@ -391,11 +455,23 @@ const ui = {
   addPlaylistButton: document.getElementById("add-playlist-button"),
   updateEntryButton: document.getElementById("update-entry-button"),
   saveFunscriptButton: document.getElementById("save-funscript-button"),
+  savePlaylistButton: document.getElementById("save-playlist-button"),
+  loadPlaylistButton: document.getElementById("load-playlist-button"),
+  playlistFile: document.getElementById("playlist-file"),
   detectLovenseButton: document.getElementById("detect-lovense-button"),
   stopLovenseButton: document.getElementById("stop-lovense-button"),
   addLovenseConnectionButton: document.getElementById("add-lovense-connection-button"),
   removeLovenseConnectionButton: document.getElementById("remove-lovense-connection-button"),
   importLibraryButton: document.getElementById("import-library-button"),
+  androidFolderActions: document.getElementById("android-folder-actions"),
+  androidFolderSelectionStatus: document.getElementById("android-folder-selection-status"),
+  selectVideoFromFolderButton: document.getElementById("select-video-from-folder-button"),
+  selectFunscriptFromFolderButton: document.getElementById("select-funscript-from-folder-button"),
+  selectPlaylistFromFolderButton: document.getElementById("select-playlist-from-folder-button"),
+  libraryDeleteActions: document.getElementById("library-delete-actions"),
+  deleteVideoFromLibraryButton: document.getElementById("delete-video-from-library-button"),
+  deleteFunscriptFromLibraryButton: document.getElementById("delete-funscript-from-library-button"),
+  deletePlaylistFromLibraryButton: document.getElementById("delete-playlist-from-library-button"),
   openVideoLibraryButton: document.getElementById("open-video-library-button"),
   openFunscriptLibraryButton: document.getElementById("open-funscript-library-button"),
   openExportsLibraryButton: document.getElementById("open-exports-library-button"),
@@ -434,6 +510,7 @@ async function init() {
     await checkForUpdates({ automatic: true });
   }
   renderExecutionModeForm();
+  renderLovensePanelState();
   renderLovenseToySelect(getCurrentSelectedToyIds(), getCurrentAvailableToys());
   renderLovenseActionRanges(resolveLovenseRuleConfig(null, { allowOfflineTest: true, requireToyId: false }), {
     mode: ui.executionMode.value === "lovense-test" ? "test" : "live",
@@ -448,25 +525,51 @@ function bindEvents() {
   ui.addPlaylistButton.addEventListener("click", handleAddToPlaylist);
   ui.updateEntryButton.addEventListener("click", updateSelectedEntrySettings);
   ui.saveFunscriptButton.addEventListener("click", saveSelectedEntryToFunscript);
+  ui.savePlaylistButton.addEventListener("click", savePlaylistToFile);
+  ui.loadPlaylistButton.addEventListener("click", openPlaylistFilePicker);
+  ui.playlistFile.addEventListener("change", handlePlaylistFileSelection);
+  ui.videoFiles.addEventListener("change", handleVideoFileSelection);
   ui.funscriptFiles.addEventListener("change", handleFunscriptSelectionPreview);
+  ui.playerPreviousButton.addEventListener("click", playPreviousPlaylistEntry);
+  ui.playerRewindButton.addEventListener("click", () => seekPlayerBy(-PLAYER_SKIP_SECONDS));
+  ui.playerPlayButton.addEventListener("click", togglePlayerPlayback);
+  ui.playerForwardButton.addEventListener("click", () => seekPlayerBy(PLAYER_SKIP_SECONDS));
+  ui.playerNextButton.addEventListener("click", playNextPlaylistEntry);
+  ui.playerSeek.addEventListener("input", handlePlayerSeekInput);
+  ui.playerMuteButton.addEventListener("click", togglePlayerMute);
+  ui.playerVolume.addEventListener("input", handlePlayerVolumeInput);
+  ui.playerFullscreenButton.addEventListener("click", togglePlayerFullscreen);
+  ui.playerLovenseStopButton.addEventListener("click", toggleLovenseEmergencyStop);
+  ui.playerShell.addEventListener("mousemove", handlePlayerMouseMove);
+  ui.playerShell.addEventListener("mouseleave", handlePlayerMouseLeave);
+  ui.playerShell.addEventListener("pointerdown", handlePlayerPointerDown);
   ui.executionMode.addEventListener("change", () => {
+    syncLovenseRuleTextareaFromSelectedConnection();
     renderExecutionModeForm();
     renderLovenseToySelect(getCurrentSelectedToyIds(), getCurrentAvailableToys(), getCurrentToyFallbacks());
     updateLovenseSelectionDetails(getSelectedToysForCurrentMode(getCurrentEntry()?.lovense));
+    syncCurrentEntryFromLovenseForm();
     renderLovenseRuleStatus();
   });
+  ui.toggleLovensePanelButton.addEventListener("click", toggleLovensePanelCollapsed);
   ui.detectLovenseButton.addEventListener("click", detectLovenseDevices);
-  ui.stopLovenseButton.addEventListener("click", () =>
-    sendLovenseStopForCurrentEntry("Manual stop command sent.", { force: true }),
-  );
+  ui.stopLovenseButton.addEventListener("click", toggleLovenseEmergencyStop);
   ui.addLovenseConnectionButton.addEventListener("click", addLovenseConnectionProfile);
   ui.removeLovenseConnectionButton.addEventListener("click", removeLovenseConnectionProfile);
-  ui.importLibraryButton.addEventListener("click", handleImportSelectedFilesToLibrary);
-  ui.openVideoLibraryButton.addEventListener("click", () => openLibraryDirectory("videos"));
-  ui.openFunscriptLibraryButton.addEventListener("click", () => openLibraryDirectory("funscripts"));
-  ui.openExportsLibraryButton.addEventListener("click", () => openLibraryDirectory("exports"));
+  ui.importLibraryButton.addEventListener("click", handleSaveSelectedFilesToLibrary);
+  ui.selectVideoFromFolderButton.addEventListener("click", selectVideoFromAppFolder);
+  ui.selectFunscriptFromFolderButton.addEventListener("click", selectFunscriptFromAppFolder);
+  ui.selectPlaylistFromFolderButton.addEventListener("click", selectPlaylistFromAppFolder);
+  ui.deleteVideoFromLibraryButton.addEventListener("click", () => deleteLibraryFile("videos"));
+  ui.deleteFunscriptFromLibraryButton.addEventListener("click", () => deleteLibraryFile("funscripts"));
+  ui.deletePlaylistFromLibraryButton.addEventListener("click", () => deleteLibraryFile("exports"));
+  ui.openVideoLibraryButton?.addEventListener("click", () => openLibraryDirectory("videos"));
+  ui.openFunscriptLibraryButton?.addEventListener("click", () => openLibraryDirectory("funscripts"));
+  ui.openExportsLibraryButton?.addEventListener("click", () => openLibraryDirectory("exports"));
   ui.refreshDiagnosticsButton.addEventListener("click", loadDiagnosticsInfo);
+  ui.copyDiagnosticsLogButton.addEventListener("click", copyDiagnosticsLog);
   ui.openDiagnosticsButton.addEventListener("click", openDiagnosticsFolder);
+  ui.lovenseActiveConnections.addEventListener("change", handleLovenseActiveConnectionChange);
   ui.lovenseConnectionSelect.addEventListener("change", handleLovenseConnectionSelectionChange);
   ui.lovenseConnectionName.addEventListener("input", handleLovenseConnectionFieldInput);
   ui.lovenseScheme.addEventListener("change", handleLovenseConnectionFieldInput);
@@ -474,7 +577,7 @@ function bindEvents() {
   ui.lovensePort.addEventListener("input", handleLovenseConnectionFieldInput);
   ui.lovensePlatformName.addEventListener("input", handleLovenseConnectionFieldInput);
   ui.lovenseToySelect.addEventListener("change", handleLovenseToySelectionChange);
-  ui.lovenseRules.addEventListener("input", renderLovenseRuleStatus);
+  ui.lovenseRules.addEventListener("input", handleLovenseRulesInput);
   ui.playSelectedButton.addEventListener("click", loadSelectedEntryIntoPlayer);
   ui.nextButton.addEventListener("click", playNextPlaylistEntry);
   ui.removeEntryButton.addEventListener("click", removeSelectedEntry);
@@ -484,21 +587,28 @@ function bindEvents() {
   ui.clearLogButton.addEventListener("click", clearLog);
   ui.playlistMode.addEventListener("change", handlePlaybackModeChange);
   ui.playlistList.addEventListener("click", handlePlaylistListClick);
+  ui.playlistList.addEventListener("change", handlePlaylistUserToggleChange);
   ui.updateAutoCheck.addEventListener("change", handleUpdateAutoCheckChange);
   ui.showDiagnosticsToggle.addEventListener("change", handleSectionVisibilityChange);
   ui.showFunscriptOverviewToggle.addEventListener("change", handleSectionVisibilityChange);
   ui.showExecutionLogToggle.addEventListener("change", handleSectionVisibilityChange);
+  ui.showUpdatesToggle.addEventListener("change", handleSectionVisibilityChange);
   ui.checkUpdatesButton.addEventListener("click", handleManualUpdateCheck);
   ui.updateReleaseLink.addEventListener("click", handleUpdateReleaseClick);
   ui.legalNoticeAcknowledgeButton.addEventListener("click", acknowledgeLegalNotice);
   ui.confirmationModalCancelButton.addEventListener("click", () => resolveConfirmationModal(false));
   ui.confirmationModalConfirmButton.addEventListener("click", () => resolveConfirmationModal(true));
+  ui.libraryFileModalCancelButton.addEventListener("click", () => resolveLibraryFileModal(null));
+  ui.libraryFileModalList.addEventListener("click", handleLibraryFileModalClick);
 
-  ui.video.addEventListener("play", startSchedulerLoop);
+  ui.video.addEventListener("play", handleVideoPlay);
   ui.video.addEventListener("pause", handleVideoPause);
   ui.video.addEventListener("ended", handleVideoEnded);
+  ui.video.addEventListener("click", handleVideoSurfaceClick);
   ui.video.addEventListener("timeupdate", renderStatus);
   ui.video.addEventListener("loadedmetadata", renderStatus);
+  ui.video.addEventListener("durationchange", renderStatus);
+  ui.video.addEventListener("volumechange", renderStatus);
   ui.video.addEventListener("seeked", resyncSchedulerToCurrentTime);
 }
 
@@ -566,6 +676,7 @@ function normalizeAppSettings(settings) {
       showDiagnostics: settings?.ui?.showDiagnostics !== false,
       showFunscriptOverview: settings?.ui?.showFunscriptOverview !== false,
       showExecutionLog: settings?.ui?.showExecutionLog !== false,
+      showUpdates: settings?.ui?.showUpdates !== false,
     },
     legal: {
       lastAcknowledgedVersion: String(settings?.legal?.lastAcknowledgedVersion || ""),
@@ -584,6 +695,7 @@ function buildAppSettingsPayload() {
       showDiagnostics: state.appSettings.ui.showDiagnostics,
       showFunscriptOverview: state.appSettings.ui.showFunscriptOverview,
       showExecutionLog: state.appSettings.ui.showExecutionLog,
+      showUpdates: state.appSettings.ui.showUpdates,
     },
     legal: {
       lastAcknowledgedVersion: state.appSettings.legal.lastAcknowledgedVersion,
@@ -728,7 +840,7 @@ function renderLegalNoticeDialog(visible, errorMessage = "") {
 
   ui.legalNoticeBody.innerHTML = LEGAL_NOTICE_HTML;
   ui.legalNoticeModal.classList.toggle("hidden", !visible);
-  document.body.classList.toggle("modal-open", visible);
+  updateModalOpenState();
   ui.legalNoticeAcknowledgeButton.disabled = false;
 
   if (visible && errorMessage) {
@@ -747,6 +859,10 @@ function renderConfirmationModal({
   title = "Confirmation",
   subtitle = "",
   body = "",
+  inputLabel = "Name",
+  inputValue = "",
+  inputPlaceholder = "",
+  inputVisible = false,
   checkboxLabel = "Don't show again",
   checkboxVisible = false,
   confirmLabel = "Continue",
@@ -760,6 +876,10 @@ function renderConfirmationModal({
   ui.confirmationModalTitle.textContent = title;
   ui.confirmationModalSubtitle.textContent = subtitle;
   ui.confirmationModalBody.textContent = body;
+  ui.confirmationModalInputLabel.textContent = inputLabel;
+  ui.confirmationModalInput.value = inputValue;
+  ui.confirmationModalInput.placeholder = inputPlaceholder;
+  ui.confirmationModalInputRow.classList.toggle("hidden", !inputVisible);
   ui.confirmationModalCheckboxLabel.textContent = checkboxLabel;
   ui.confirmationModalCheckbox.checked = false;
   ui.confirmationModalCheckboxRow.classList.toggle("hidden", !checkboxVisible);
@@ -777,10 +897,21 @@ function renderConfirmationModal({
     ui.confirmationModalStatus.classList.add("hidden");
   }
 
-  document.body.classList.toggle(
-    "modal-open",
-    visible || !ui.legalNoticeModal.classList.contains("hidden"),
-  );
+  updateModalOpenState();
+
+  if (visible && inputVisible) {
+    setTimeout(() => {
+      ui.confirmationModalInput.focus();
+      ui.confirmationModalInput.select();
+    }, 0);
+  }
+}
+
+function updateModalOpenState() {
+  const isAnyModalVisible = [ui.legalNoticeModal, ui.confirmationModal, ui.libraryFileModal]
+    .filter(Boolean)
+    .some((modal) => !modal.classList.contains("hidden"));
+  document.body.classList.toggle("modal-open", isAnyModalVisible);
 }
 
 function showConfirmationModal(options) {
@@ -798,8 +929,9 @@ function resolveConfirmationModal(confirmed) {
   const resolver = state.confirmationModalResolver;
   state.confirmationModalResolver = null;
   const dontShowAgain = ui.confirmationModalCheckbox.checked;
+  const inputValue = ui.confirmationModalInput.value;
   renderConfirmationModal({ visible: false });
-  resolver({ confirmed, dontShowAgain });
+  resolver({ confirmed, dontShowAgain, inputValue });
 }
 
 async function ensureLegalNoticeAcknowledged() {
@@ -849,9 +981,11 @@ function renderSectionVisibilitySettings() {
   ui.showDiagnosticsToggle.checked = state.appSettings.ui.showDiagnostics;
   ui.showFunscriptOverviewToggle.checked = state.appSettings.ui.showFunscriptOverview;
   ui.showExecutionLogToggle.checked = state.appSettings.ui.showExecutionLog;
+  ui.showUpdatesToggle.checked = state.appSettings.ui.showUpdates;
   ui.diagnosticsPanel.classList.toggle("hidden", !state.appSettings.ui.showDiagnostics);
   ui.scriptCard.classList.toggle("hidden", !state.appSettings.ui.showFunscriptOverview);
   ui.logCard.classList.toggle("hidden", !state.appSettings.ui.showExecutionLog);
+  ui.updatePanel.classList.toggle("hidden", !state.appSettings.ui.showUpdates);
 }
 
 async function handleUpdateAutoCheckChange() {
@@ -965,6 +1099,7 @@ async function handleSectionVisibilityChange() {
   state.appSettings.ui.showDiagnostics = ui.showDiagnosticsToggle.checked;
   state.appSettings.ui.showFunscriptOverview = ui.showFunscriptOverviewToggle.checked;
   state.appSettings.ui.showExecutionLog = ui.showExecutionLogToggle.checked;
+  state.appSettings.ui.showUpdates = ui.showUpdatesToggle.checked;
   renderSectionVisibilitySettings();
 
   try {
@@ -1032,6 +1167,18 @@ function normalizeDiagnosticsInfo(payload) {
   };
 }
 
+function setTextOutput(element, text) {
+  if ("value" in element) {
+    element.value = text;
+    return;
+  }
+  element.textContent = text;
+}
+
+function getTextOutput(element) {
+  return "value" in element ? element.value : element.textContent || "";
+}
+
 function renderDiagnosticsInfo() {
   if (!ui.diagnosticsStatus || !ui.diagnosticsPaths || !ui.diagnosticsLog) {
     return;
@@ -1040,7 +1187,7 @@ function renderDiagnosticsInfo() {
   if (!state.backendCapabilities.diagnostics) {
     ui.diagnosticsStatus.textContent = "Diagnostics unavailable";
     ui.diagnosticsPaths.value = "The current backend does not expose diagnostics information.";
-    ui.diagnosticsLog.value = "No diagnostic log output is available.";
+    setTextOutput(ui.diagnosticsLog, "No diagnostic log output is available.");
     ui.refreshDiagnosticsButton.disabled = true;
     ui.openDiagnosticsButton.disabled = true;
     ui.openDiagnosticsButton.classList.add("hidden");
@@ -1050,7 +1197,7 @@ function renderDiagnosticsInfo() {
   if (!state.diagnostics.available) {
     ui.diagnosticsStatus.textContent = "Diagnostics not loaded";
     ui.diagnosticsPaths.value = "Could not load diagnostics information from the backend.";
-    ui.diagnosticsLog.value = "No diagnostic log output is available yet.";
+    setTextOutput(ui.diagnosticsLog, "No diagnostic log output is available yet.");
     ui.refreshDiagnosticsButton.disabled = false;
     ui.openDiagnosticsButton.disabled = true;
     ui.openDiagnosticsButton.classList.add("hidden");
@@ -1067,7 +1214,7 @@ function renderDiagnosticsInfo() {
     `Log directory: ${state.diagnostics.paths.logDirectory || "-"}`,
     `Log file: ${state.diagnostics.paths.logFile || "-"}`,
   ].join("\n");
-  ui.diagnosticsLog.value = state.diagnostics.recentLog || "No recent log output has been written yet.";
+  setTextOutput(ui.diagnosticsLog, state.diagnostics.recentLog || "No recent log output has been written yet.");
   ui.refreshDiagnosticsButton.disabled = false;
   ui.openDiagnosticsButton.disabled = !state.diagnostics.capabilities.openLogFolder;
   ui.openDiagnosticsButton.classList.toggle("hidden", !state.diagnostics.capabilities.openLogFolder);
@@ -1097,6 +1244,43 @@ async function loadDiagnosticsInfo() {
   }
 }
 
+async function copyDiagnosticsLog() {
+  const text = getTextOutput(ui.diagnosticsLog).trim();
+  if (!text) {
+    appendLog({ ok: false, title: "No diagnostics log to copy", detail: "The recent log output is empty." });
+    return;
+  }
+
+  try {
+    await writeClipboardText(text);
+    appendLog({ ok: true, title: "Diagnostics log copied", detail: "Recent log output was copied to the clipboard." });
+  } catch (error) {
+    appendLog({ ok: false, title: "Could not copy diagnostics log", detail: String(error) });
+  }
+}
+
+async function writeClipboardText(text) {
+  if (state.backendCapabilities.platform === "android") {
+    const response = await fetch("/api/android/clipboard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const data = await parseJsonResponse(response);
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+    return;
+  }
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  throw new Error("Clipboard access is not available in this browser.");
+}
+
 async function openDiagnosticsFolder() {
   if (!state.diagnostics.capabilities.openLogFolder) {
     return;
@@ -1110,6 +1294,11 @@ async function openDiagnosticsFolder() {
     if (!response.ok || !data.ok) {
       throw new Error(data.error || `HTTP ${response.status}`);
     }
+    appendLog({
+      ok: true,
+      title: "Library folder open requested",
+      detail: `${data.path || kind}\nOpener: ${data.opener || "system default"}`,
+    });
   } catch (error) {
     appendLog({
       ok: false,
@@ -1125,10 +1314,11 @@ function renderExecutionModeForm() {
   ui.lovenseConfig.classList.toggle("hidden", !isLovenseMode);
   ui.lovenseLiveConfig.classList.toggle("hidden", !isLovenseLiveMode);
   ui.lovenseDeviceLabel.textContent = isLovenseLiveMode ? "Detected devices" : "Simulated devices";
+  renderLovenseActiveConnectionControls();
   if (isLovenseMode) {
     ui.lovenseStatus.textContent = isLovenseLiveMode
       ? `Active profile: ${getSelectedConnection(state.formLovense)?.label || "User"}`
-      : "Simulation mode active.";
+      : `Simulation profile: ${getSelectedConnection(state.formLovense)?.label || "User"}`;
   }
 }
 
@@ -1152,6 +1342,9 @@ async function refreshLibraryInfo() {
       capabilities: {
         import: data.capabilities?.import !== false,
         reveal: data.capabilities?.reveal === true,
+        serve: data.capabilities?.serve === true,
+        localFiles: data.capabilities?.localFiles === true,
+        delete: data.capabilities?.delete === true,
       },
     };
   } catch (error) {
@@ -1167,6 +1360,9 @@ async function refreshLibraryInfo() {
       capabilities: {
         import: false,
         reveal: false,
+        serve: false,
+        localFiles: false,
+        delete: false,
       },
     };
     appendLog({ ok: false, title: "Library unavailable", detail: String(error) });
@@ -1184,7 +1380,9 @@ function renderLibraryInfo() {
     ui.libraryStatus.textContent = "Managed library unavailable.";
     ui.libraryPaths.value = "No managed library endpoint was detected.";
     toggleLibraryRevealButtons(false);
+    renderAndroidFolderActions();
     ui.importLibraryButton.disabled = true;
+    ui.libraryDeleteActions.classList.add("hidden");
     return;
   }
 
@@ -1201,13 +1399,474 @@ function renderLibraryInfo() {
   ui.libraryPaths.value = pathLines.join("\n");
   ui.importLibraryButton.disabled = !state.library.capabilities.import;
   toggleLibraryRevealButtons(state.library.capabilities.reveal);
+  renderAndroidFolderActions();
 }
 
 function toggleLibraryRevealButtons(isEnabled) {
   [ui.openVideoLibraryButton, ui.openFunscriptLibraryButton, ui.openExportsLibraryButton].forEach((button) => {
+    if (!button) {
+      return;
+    }
     button.disabled = !isEnabled;
     button.classList.toggle("hidden", !isEnabled);
   });
+}
+
+function renderAndroidFolderActions() {
+  const canSelectFromLibrary = state.library.available && state.library.capabilities.serve;
+  const canDeleteFromLibrary = canSelectFromLibrary && state.library.capabilities.delete;
+  ui.androidFolderActions.classList.toggle("hidden", !canSelectFromLibrary);
+  [ui.selectVideoFromFolderButton, ui.selectFunscriptFromFolderButton, ui.selectPlaylistFromFolderButton].forEach(
+    (button) => {
+      button.disabled = !canSelectFromLibrary;
+    },
+  );
+  ui.libraryDeleteActions.classList.toggle("hidden", !canDeleteFromLibrary);
+  [ui.deleteVideoFromLibraryButton, ui.deleteFunscriptFromLibraryButton, ui.deletePlaylistFromLibraryButton].forEach(
+    (button) => {
+      button.disabled = !canDeleteFromLibrary;
+    },
+  );
+  renderAndroidFolderSelectionStatus();
+}
+
+function renderAndroidFolderSelectionStatus() {
+  if (!ui.androidFolderSelectionStatus) {
+    return;
+  }
+
+  const videoName = state.pendingLibrarySelection.video?.name || "";
+  const funscriptName = state.pendingLibrarySelection.funscript?.file?.name || "";
+  const hasSelection = Boolean(videoName || funscriptName);
+  ui.androidFolderSelectionStatus.classList.toggle("hidden", !hasSelection);
+  ui.androidFolderSelectionStatus.textContent = hasSelection
+    ? `Selected from library folders: Video: ${videoName || "-"} | Funscript: ${funscriptName || "-"}`
+    : "No library files selected.";
+}
+
+async function selectVideoFromAppFolder() {
+  try {
+    const files = (await fetchLibraryFiles("videos")).filter(isVideoLibraryFile);
+    const selectedFile = await showLibraryFileModal({
+      title: "Select video",
+      subtitle: state.library.directories.videos || "FHPlayer video folder",
+      files,
+    });
+    if (!selectedFile) {
+      return;
+    }
+
+    state.pendingLibrarySelection.video = normalizeLibrarySelection("videos", selectedFile);
+    ui.videoFiles.value = "";
+    renderAndroidFolderSelectionStatus();
+    appendLog({
+      ok: true,
+      title: "Video selected",
+      detail: `${selectedFile.name} was selected from the FHPlayer video library.`,
+    });
+  } catch (error) {
+    appendLog({ ok: false, title: "Could not select video", detail: String(error) });
+  }
+  renderLovenseStopControl();
+}
+
+function toggleLovensePanelCollapsed() {
+  state.lovensePanelCollapsed = !state.lovensePanelCollapsed;
+  renderLovensePanelState();
+}
+
+function renderLovensePanelState() {
+  ui.lovenseCard.classList.toggle("collapsed", state.lovensePanelCollapsed);
+  ui.lovensePanelBody.classList.toggle("hidden", state.lovensePanelCollapsed);
+  ui.lovensePanelChevron.textContent = state.lovensePanelCollapsed ? ">" : "v";
+  ui.toggleLovensePanelButton.setAttribute("aria-expanded", state.lovensePanelCollapsed ? "false" : "true");
+}
+
+async function selectFunscriptFromAppFolder() {
+  try {
+    const files = (await fetchLibraryFiles("funscripts")).filter(isFunscriptLibraryFile);
+    const selectedFile = await showLibraryFileModal({
+      title: "Select funscript",
+      subtitle: state.library.directories.funscripts || "FHPlayer funscript folder",
+      files,
+    });
+    if (!selectedFile) {
+      return;
+    }
+
+    const scriptData = await parseFunscriptLibraryFile(selectedFile);
+    state.pendingLibrarySelection.funscript = scriptData;
+    ui.funscriptFiles.value = "";
+    renderAndroidFolderSelectionStatus();
+
+    if (hasPersistedScriptSettings(scriptData.settings)) {
+      applyScriptSettingsToForm(scriptData.settings);
+      appendLog({
+        ok: true,
+        title: "Funscript settings applied",
+        detail: `Loaded saved FHPlayer settings from ${selectedFile.name} into the form.`,
+      });
+      return;
+    }
+
+    appendLog({
+      ok: true,
+      title: "Funscript selected",
+      detail: `${selectedFile.name} was selected from the FHPlayer funscript library.`,
+    });
+  } catch (error) {
+    appendLog({ ok: false, title: "Could not select funscript", detail: String(error) });
+  }
+}
+
+async function selectPlaylistFromAppFolder() {
+  try {
+    const files = (await fetchLibraryFiles("exports")).filter(isPlaylistLibraryFile);
+    const selectedFile = await showLibraryFileModal({
+      title: "Select playlist",
+      subtitle: state.library.directories.exports || "FHPlayer export folder",
+      files,
+    });
+    if (!selectedFile) {
+      return;
+    }
+
+    await loadPlaylistFromLibraryFile(selectedFile);
+  } catch (error) {
+    appendLog({ ok: false, title: "Could not select playlist", detail: String(error) });
+  }
+}
+
+async function deleteLibraryFile(kind) {
+  const config = getLibraryFileActionConfig(kind);
+  try {
+    const files = (await fetchLibraryFiles(config.kind)).filter(config.filter);
+    showLibraryFileModal({
+      title: `Delete ${config.singular}`,
+      subtitle: state.library.directories[config.kind] || config.folderLabel,
+      files,
+      mode: "delete",
+      deleteConfig: config,
+    });
+  } catch (error) {
+    appendLog({ ok: false, title: `Could not delete ${config.singular}`, detail: String(error) });
+  }
+}
+
+async function deleteLibraryFileByName(kind, fileName, options = {}) {
+  const response = await fetch(buildLibraryFileUrl(kind, fileName), {
+    method: "DELETE",
+    cache: "no-store",
+  });
+  const data = await parseJsonResponse(response);
+  if (!response.ok || !data.ok) {
+    if (options.ignoreNotFound && response.status === 404) {
+      return data;
+    }
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
+function getLibraryFileActionConfig(kind) {
+  const normalizedKind = normalizeLibraryKind(kind);
+  if (normalizedKind === "videos") {
+    return {
+      kind: "videos",
+      singular: "video",
+      plural: "videos",
+      folderLabel: "video library",
+      filter: isVideoLibraryFile,
+    };
+  }
+  if (normalizedKind === "funscripts") {
+    return {
+      kind: "funscripts",
+      singular: "funscript",
+      plural: "funscripts",
+      folderLabel: "funscript library",
+      filter: isFunscriptLibraryFile,
+    };
+  }
+  return {
+    kind: "exports",
+    singular: "playlist",
+    plural: "playlists",
+    folderLabel: "export library",
+    filter: isPlaylistLibraryFile,
+  };
+}
+
+function clearPendingLibrarySelection(kind, fileName) {
+  const normalizedKind = normalizeLibraryKind(kind);
+  if (
+    normalizedKind === "videos" &&
+    state.pendingLibrarySelection.video?.name === fileName
+  ) {
+    state.pendingLibrarySelection.video = null;
+  }
+  if (
+    normalizedKind === "funscripts" &&
+    state.pendingLibrarySelection.funscript?.file?.name === fileName
+  ) {
+    state.pendingLibrarySelection.funscript = null;
+  }
+  if (
+    normalizedKind === "exports" &&
+    state.playlistLibraryFileName === fileName
+  ) {
+    state.playlistLibraryFileName = "";
+  }
+}
+
+async function fetchLibraryFiles(kind) {
+  if (!state.library.available || !state.library.capabilities.serve) {
+    throw new Error("The managed FHPlayer library is not available.");
+  }
+
+  const response = await fetch(buildLibraryListUrl(kind), { cache: "no-store" });
+  const data = await parseJsonResponse(response);
+  if (!response.ok || !data.ok) {
+    if (response.status === 404) {
+      throw new Error(
+        "The running FHPlayer backend does not provide the library file list endpoint. Restart python app.py or install the latest Android APK.",
+      );
+    }
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+
+  return (Array.isArray(data.files) ? data.files : [])
+    .map((file) => normalizeLibraryFile(file))
+    .filter((file) => file.name);
+}
+
+function normalizeLibraryFile(file) {
+  const name = String(file?.name || "").trim();
+  return {
+    name,
+    path: String(file?.path || ""),
+    sizeBytes: Number.isFinite(Number(file?.sizeBytes)) ? Number(file.sizeBytes) : null,
+    modifiedMs: Number.isFinite(Number(file?.modifiedMs)) ? Number(file.modifiedMs) : null,
+  };
+}
+
+function normalizeLibrarySelection(kind, file) {
+  const normalizedFile = normalizeLibraryFile(file);
+  return {
+    ...normalizedFile,
+    kind: normalizeLibraryKind(kind),
+    libraryName: normalizedFile.name,
+    source: "library",
+    url: buildLibraryFileUrl(kind, normalizedFile.name),
+  };
+}
+
+function isVideoLibraryFile(file) {
+  return ACCEPTED_VIDEO_EXTENSIONS.has(getFileExtension(file?.name));
+}
+
+function isFunscriptLibraryFile(file) {
+  return ACCEPTED_FUNSCRIPT_EXTENSIONS.has(getFileExtension(file?.name));
+}
+
+function isPlaylistLibraryFile(file) {
+  const extension = getFileExtension(file?.name);
+  return extension === "fhplaylist" || extension === "json";
+}
+
+async function parseFunscriptLibraryFile(file) {
+  const selection = normalizeLibrarySelection("funscripts", file);
+  const parsed = await fetchJsonFile(selection.url);
+  return {
+    file: {
+      name: selection.name,
+      type: "application/json",
+    },
+    stem: normalizeStem(selection.name),
+    parsed,
+    actions: extractFunscriptActions(parsed),
+    settings: extractScriptSettings(parsed),
+    source: normalizeMediaSource(selection, "funscripts", selection.name),
+  };
+}
+
+async function loadPlaylistFromLibraryFile(file) {
+  const selection = normalizeLibrarySelection("exports", file);
+  const response = await fetch(selection.url, { cache: "no-store" });
+  const text = await response.text();
+  if (!response.ok) {
+    let errorText = `HTTP ${response.status}`;
+    try {
+      errorText = JSON.parse(text).error || errorText;
+    } catch (_error) {
+      // Keep the HTTP status when the response is not JSON.
+    }
+    throw new Error(errorText);
+  }
+
+  await loadPlaylistFromFile({
+    name: selection.name,
+    text: async () => text,
+  }, { libraryFileName: selection.name });
+}
+
+function showLibraryFileModal({ title, subtitle, files, mode = "select", deleteConfig = null }) {
+  if (state.libraryFileModal.resolver) {
+    resolveLibraryFileModal(null);
+  }
+
+  state.libraryFileModal.files = files;
+  state.libraryFileModal.mode = mode;
+  state.libraryFileModal.deleteConfig = deleteConfig;
+  state.libraryFileModal.busy = false;
+  ui.libraryFileModalTitle.textContent = title;
+  ui.libraryFileModalSubtitle.textContent = subtitle || "";
+  renderLibraryFileModal();
+  ui.libraryFileModal.classList.remove("hidden");
+  updateModalOpenState();
+
+  return new Promise((resolve) => {
+    state.libraryFileModal.resolver = mode === "select" ? resolve : null;
+  });
+}
+
+function renderLibraryFileModal() {
+  ui.libraryFileModalList.textContent = "";
+  if (!state.libraryFileModal.files.length) {
+    ui.libraryFileModalStatus.textContent = "No matching files were found in this FHPlayer library folder.";
+    ui.libraryFileModalStatus.classList.remove("hidden");
+    return;
+  }
+
+  ui.libraryFileModalStatus.classList.add("hidden");
+  state.libraryFileModal.files.forEach((file, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "library-file-button";
+    button.dataset.libraryFileIndex = String(index);
+
+    const name = document.createElement("strong");
+    name.textContent = file.name;
+    const details = document.createElement("span");
+    details.textContent = formatLibraryFileDetails(file);
+    button.append(name, details);
+    ui.libraryFileModalList.append(button);
+  });
+}
+
+function handleLibraryFileModalClick(event) {
+  const button = event.target.closest("[data-library-file-index]");
+  if (!button) {
+    return;
+  }
+
+  const fileIndex = Number(button.dataset.libraryFileIndex);
+  const file = state.libraryFileModal.files[fileIndex] || null;
+  if (state.libraryFileModal.mode === "delete") {
+    confirmAndDeleteLibraryModalFile(file, fileIndex);
+    return;
+  }
+
+  resolveLibraryFileModal(file);
+}
+
+function resolveLibraryFileModal(file) {
+  const resolver = state.libraryFileModal.resolver;
+  state.libraryFileModal.resolver = null;
+  state.libraryFileModal.files = [];
+  state.libraryFileModal.mode = "select";
+  state.libraryFileModal.deleteConfig = null;
+  state.libraryFileModal.busy = false;
+  ui.libraryFileModal.classList.add("hidden");
+  ui.libraryFileModalList.textContent = "";
+  updateModalOpenState();
+  if (resolver) {
+    resolver(file);
+  }
+}
+
+async function confirmAndDeleteLibraryModalFile(file, fileIndex) {
+  const config = state.libraryFileModal.deleteConfig;
+  if (!file || !config || state.libraryFileModal.busy) {
+    return;
+  }
+
+  const { confirmed } = await showConfirmationModal({
+    title: `Delete ${config.singular}`,
+    subtitle: file.name,
+    body: `Are you sure you want to delete this ${config.singular}? This permanently removes ${file.name} from the FHPlayer ${config.folderLabel}.`,
+    confirmLabel: `Delete ${config.singular}`,
+    cancelLabel: "Cancel",
+  });
+  if (!confirmed) {
+    appendLog({ ok: false, title: "Library delete cancelled", detail: `${file.name} was kept.` });
+    return;
+  }
+
+  state.libraryFileModal.busy = true;
+  try {
+    await deleteLibraryFileByName(config.kind, file.name);
+    clearPendingLibrarySelection(config.kind, file.name);
+    renderAndroidFolderSelectionStatus();
+    state.libraryFileModal.files = state.libraryFileModal.files.filter((candidate, index) => {
+      return index !== fileIndex && candidate.name !== file.name;
+    });
+    appendLog({
+      ok: true,
+      title: "Library file deleted",
+      detail: `${file.name} was deleted from the FHPlayer ${config.folderLabel}.`,
+    });
+
+    if (!state.libraryFileModal.files.length) {
+      resolveLibraryFileModal(null);
+      return;
+    }
+
+    renderLibraryFileModal();
+  } catch (error) {
+    appendLog({ ok: false, title: `Could not delete ${config.singular}`, detail: String(error) });
+  } finally {
+    state.libraryFileModal.busy = false;
+  }
+}
+
+function formatLibraryFileDetails(file) {
+  const parts = [];
+  if (file.sizeBytes !== null) {
+    parts.push(formatFileSize(file.sizeBytes));
+  }
+  if (file.modifiedMs !== null) {
+    parts.push(new Date(file.modifiedMs).toLocaleString());
+  }
+  if (file.path) {
+    parts.push(file.path);
+  }
+  return parts.join(" | ") || "FHPlayer library folder";
+}
+
+function formatFileSize(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value < 0) {
+    return "";
+  }
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  if (value < 1024 * 1024 * 1024) {
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function openVideoFilePicker() {
+  ui.videoFiles.click();
+}
+
+function openFunscriptFilePicker() {
+  ui.funscriptFiles.click();
 }
 
 async function detectLovenseDevices() {
@@ -1262,12 +1921,14 @@ async function detectLovenseDevices() {
         ? `No Lovense devices detected for ${connection.label} via ${data.resolvedEndpoint}.`
         : `No Lovense devices detected for ${connection.label}.`;
     }
+    syncCurrentEntryFromLovenseForm();
     renderLovenseRuleStatus();
   } catch (error) {
     state.detectedToysByConnection[connection.id] = [];
     renderLovenseToySelect([], getCurrentAvailableToys(), getCurrentToyFallbacks());
     assignSelectedToysToForm([]);
     updateLovenseSelectionDetails([]);
+    syncCurrentEntryFromLovenseForm();
     renderLovenseRuleStatus();
     ui.lovenseStatus.textContent = "Device detection failed.";
     appendLog({
@@ -1282,25 +1943,28 @@ function handleLovenseToySelectionChange() {
   const selectedToys = getSelectedToysForCurrentMode(getCurrentEntry()?.lovense);
   assignSelectedToysToForm(selectedToys);
   updateLovenseSelectionDetails(selectedToys);
-  renderPlaylist();
-  renderStatus();
+  syncCurrentEntryFromLovenseForm();
   renderLovenseRuleStatus();
 }
 
 function handleLovenseConnectionSelectionChange() {
+  writeCurrentRulesTextToSelectedConnection();
   const selectedConnectionId = ui.lovenseConnectionSelect.value;
   state.formLovense = normalizeLovenseConfig({
     ...state.formLovense,
     selectedConnectionId,
   });
   syncLovenseConnectionFields();
+  syncLovenseRuleTextareaFromSelectedConnection();
   renderExecutionModeForm();
   renderLovenseToySelect(getCurrentSelectedToyIds(), getCurrentAvailableToys(), getCurrentToyFallbacks());
   updateLovenseSelectionDetails(getSelectedToysForCurrentMode(getCurrentEntry()?.lovense));
+  syncCurrentEntryFromLovenseForm();
   renderLovenseRuleStatus();
 }
 
 function handleLovenseConnectionFieldInput() {
+  writeCurrentRulesTextToSelectedConnection();
   const selectedConnection = getSelectedConnection(state.formLovense);
   if (!selectedConnection) {
     return;
@@ -1328,11 +1992,12 @@ function handleLovenseConnectionFieldInput() {
   renderLovenseConnectionSelect();
   syncLovenseConnectionFields();
   renderExecutionModeForm();
-  renderPlaylist();
-  renderStatus();
+  syncCurrentEntryFromLovenseForm();
+  renderLovenseRuleStatus();
 }
 
 function addLovenseConnectionProfile() {
+  writeCurrentRulesTextToSelectedConnection();
   const nextIndex = state.formLovense.connections.length + 1;
   const newConnection = normalizeLovenseConnection({
     ...DEFAULT_LOVENSE_CONNECTION,
@@ -1343,16 +2008,20 @@ function addLovenseConnectionProfile() {
     ...state.formLovense,
     connections: [...state.formLovense.connections, newConnection],
     selectedConnectionId: newConnection.id,
+    activeConnectionIds: [...new Set([...(state.formLovense.activeConnectionIds || []), newConnection.id])],
   });
   syncLovenseConnectionFields();
+  syncLovenseRuleTextareaFromSelectedConnection();
   renderLovenseConnectionSelect();
   renderExecutionModeForm();
   renderLovenseToySelect(getCurrentSelectedToyIds(), getCurrentAvailableToys(), getCurrentToyFallbacks());
   updateLovenseSelectionDetails(getSelectedToysForCurrentMode());
+  syncCurrentEntryFromLovenseForm();
   renderLovenseRuleStatus();
 }
 
 function removeLovenseConnectionProfile() {
+  writeCurrentRulesTextToSelectedConnection();
   if (state.formLovense.connections.length <= 1) {
     appendLog({ ok: false, title: "Connection profile not removed", detail: "At least one Lovense user profile must remain." });
     return;
@@ -1369,18 +2038,42 @@ function removeLovenseConnectionProfile() {
     ...state.formLovense,
     connections: nextConnections,
     selectedConnectionId: nextSelectedId,
+    activeConnectionIds: (state.formLovense.activeConnectionIds || []).filter((connectionId) => connectionId !== selectedConnection?.id),
   });
   syncLovenseConnectionFields();
+  syncLovenseRuleTextareaFromSelectedConnection();
   renderLovenseConnectionSelect();
   renderExecutionModeForm();
   renderLovenseToySelect(getCurrentSelectedToyIds(), getCurrentAvailableToys(), getCurrentToyFallbacks());
   updateLovenseSelectionDetails(getSelectedToysForCurrentMode(getCurrentEntry()?.lovense));
+  syncCurrentEntryFromLovenseForm();
+  renderLovenseRuleStatus();
+}
+
+function handleLovenseActiveConnectionChange() {
+  writeCurrentRulesTextToSelectedConnection();
+  const activeConnectionIds = Array.from(
+    ui.lovenseActiveConnections.querySelectorAll('input[type="checkbox"]:checked'),
+  )
+    .map((input) => input.value)
+    .filter(Boolean);
+  state.formLovense = normalizeLovenseConfig({
+    ...state.formLovense,
+    activeConnectionIds,
+  });
+  renderLovenseActiveConnectionControls();
+  syncCurrentEntryFromLovenseForm();
   renderLovenseRuleStatus();
 }
 
 async function handleAddToPlaylist() {
   const videoFiles = Array.from(ui.videoFiles.files ?? []);
   const funscriptFiles = Array.from(ui.funscriptFiles.files ?? []);
+  if (!videoFiles.length && !funscriptFiles.length && (state.pendingLibrarySelection.video || state.pendingLibrarySelection.funscript)) {
+    await addPendingLibrarySelectionToPlaylist();
+    return;
+  }
+
   if (!videoFiles.length || !funscriptFiles.length) {
     appendLog({
       ok: false,
@@ -1405,7 +2098,9 @@ async function handleAddToPlaylist() {
   }
 
   let parsedScripts;
+  let selectedVideoDocuments;
   try {
+    selectedVideoDocuments = await getSelectedDocumentsForFiles("videos", videoFiles);
     const selectedDocuments = await getSelectedDocumentsForFiles("funscripts", funscriptFiles);
     parsedScripts = await Promise.all(
       funscriptFiles.map((file, index) => parseFunscriptFile(file, selectedDocuments[index] || null)),
@@ -1425,7 +2120,10 @@ async function handleAddToPlaylist() {
     return;
   }
 
-  const addedEntries = pairing.pairs.map(({ videoFile, scriptData }) => createPlaylistEntry(videoFile, scriptData));
+  const videoDocumentByFile = new Map(videoFiles.map((file, index) => [file, selectedVideoDocuments[index] || null]));
+  const addedEntries = pairing.pairs.map(({ videoFile, scriptData }) =>
+    createPlaylistEntry(videoFile, scriptData, videoDocumentByFile.get(videoFile) || null),
+  );
   state.playlist.push(...addedEntries);
 
   if (!state.currentEntryId && addedEntries.length) {
@@ -1452,11 +2150,65 @@ async function handleAddToPlaylist() {
   appendLog({ ok: true, title: "Playlist updated", detail: details.join("\n") });
 }
 
+async function addPendingLibrarySelectionToPlaylist() {
+  const videoSelection = state.pendingLibrarySelection.video;
+  const scriptData = state.pendingLibrarySelection.funscript;
+  if (!videoSelection || !scriptData) {
+    appendLog({
+      ok: false,
+      title: "Could not extend playlist",
+      detail: "Please select one video and one funscript from the FHPlayer library first.",
+    });
+    return;
+  }
+
+  try {
+    validateCurrentFormForPersistence();
+  } catch (error) {
+    appendLog({ ok: false, title: "Could not extend playlist", detail: String(error) });
+    return;
+  }
+
+  const entry = createPlaylistEntryFromLibrary(videoSelection, scriptData);
+  state.playlist.push(entry);
+  state.pendingLibrarySelection = {
+    video: null,
+    funscript: null,
+  };
+  renderAndroidFolderSelectionStatus();
+
+  if (!state.currentEntryId) {
+    loadEntry(entry.id);
+  } else {
+    renderPlaylist();
+    renderStatus();
+  }
+
+  appendLog({
+    ok: true,
+    title: "Playlist updated",
+    detail: `Added ${entry.videoName} with ${entry.funscriptName} from the FHPlayer library.`,
+  });
+}
+
+function handleVideoFileSelection() {
+  const videoFiles = Array.from(ui.videoFiles.files ?? []);
+  if (!videoFiles.length) {
+    return;
+  }
+
+  state.pendingLibrarySelection.video = null;
+  renderAndroidFolderSelectionStatus();
+}
+
 async function handleFunscriptSelectionPreview() {
   const funscriptFiles = Array.from(ui.funscriptFiles.files ?? []);
   if (!funscriptFiles.length) {
     return;
   }
+
+  state.pendingLibrarySelection.funscript = null;
+  renderAndroidFolderSelectionStatus();
 
   try {
     validateSelectedFunscriptFiles(funscriptFiles);
@@ -1504,25 +2256,34 @@ async function handleFunscriptSelectionPreview() {
   });
 }
 
-async function handleImportSelectedFilesToLibrary() {
+async function handleSaveSelectedFilesToLibrary() {
   if (!state.library.available || !state.library.capabilities.import) {
     appendLog({
       ok: false,
-      title: "Library import unavailable",
-      detail: "This build does not support importing files into the managed FHPlayer library.",
+      title: "Library save unavailable",
+      detail: "This build does not support saving files into the managed FHPlayer library.",
     });
     return;
   }
 
   const videoFiles = Array.from(ui.videoFiles.files ?? []);
   const funscriptFiles = Array.from(ui.funscriptFiles.files ?? []);
-  if (!videoFiles.length && !funscriptFiles.length) {
+  if (!videoFiles.length && !funscriptFiles.length && !state.playlist.length) {
     appendLog({
       ok: false,
-      title: "Nothing to import",
-      detail: "Select one or more videos or funscripts first.",
+      title: "Nothing to save",
+      detail: "Select one or more videos or funscripts, or add entries to the playlist first.",
     });
     return;
+  }
+
+  let playlistFileName = "";
+  if (state.playlist.length) {
+    playlistFileName = await promptPlaylistLibraryFileName();
+    if (!playlistFileName) {
+      appendLog({ ok: false, title: "Library save cancelled", detail: "The playlist was not changed." });
+      return;
+    }
   }
 
   try {
@@ -1530,7 +2291,7 @@ async function handleImportSelectedFilesToLibrary() {
   } catch (error) {
     appendLog({
       ok: false,
-      title: "Library import failed",
+      title: "Library save failed",
       detail: String(error),
     });
     return;
@@ -1547,6 +2308,11 @@ async function handleImportSelectedFilesToLibrary() {
       importedScripts.push(await uploadFileToLibrary("funscripts", file));
     }
 
+    let playlistExport = null;
+    if (state.playlist.length) {
+      playlistExport = await savePlaylistToLibrary(playlistFileName);
+    }
+
     const detailLines = [];
     if (importedVideos.length) {
       detailLines.push(`Videos: ${importedVideos.map((item) => item.fileName).join(", ")}`);
@@ -1556,19 +2322,118 @@ async function handleImportSelectedFilesToLibrary() {
       detailLines.push(`Funscripts: ${importedScripts.map((item) => item.fileName).join(", ")}`);
       detailLines.push(`Funscript folder: ${state.library.directories.funscripts || "-"}`);
     }
+    if (playlistExport) {
+      detailLines.push(`Playlist: ${playlistExport.result.fileName || playlistExport.fileName}`);
+      detailLines.push(`Playlist folder: ${state.library.directories.exports || "-"}`);
+      const persistenceDetail = formatPlaylistPersistenceDetail("", playlistExport.persistence).trim();
+      if (persistenceDetail) {
+        detailLines.push(persistenceDetail);
+      }
+      if (playlistExport.replacedFileName) {
+        detailLines.push(`Previous playlist removed: ${playlistExport.replacedFileName}`);
+      }
+    }
 
     appendLog({
       ok: true,
-      title: "Library import finished",
+      title: "Library save finished",
       detail: detailLines.join("\n"),
     });
   } catch (error) {
     appendLog({
       ok: false,
-      title: "Library import failed",
+      title: "Library save failed",
       detail: String(error),
     });
   }
+}
+
+async function promptPlaylistLibraryFileName() {
+  let inputValue = buildPlaylistNameInputValue();
+  while (true) {
+    const { confirmed, inputValue: enteredName } = await showConfirmationModal({
+      title: "Save playlist to Library",
+      subtitle: state.library.directories.exports || "FHPlayer playlist folder",
+      body: state.playlistLibraryFileName
+        ? "Enter a playlist name. If you change the name, FHPlayer saves a new playlist file and removes the previous library copy."
+        : "Enter a playlist name for the Library copy.",
+      inputVisible: true,
+      inputLabel: "Playlist name",
+      inputValue,
+      inputPlaceholder: "My playlist",
+      confirmLabel: "Save to Library",
+      cancelLabel: "Cancel",
+    });
+    if (!confirmed) {
+      return "";
+    }
+
+    inputValue = enteredName;
+    try {
+      return buildPlaylistLibraryFileName(enteredName);
+    } catch (error) {
+      appendLog({ ok: false, title: "Invalid playlist name", detail: String(error) });
+    }
+  }
+}
+
+function buildPlaylistNameInputValue() {
+  const fileName = firstNonEmpty(state.playlistLibraryFileName, state.playlistFileName);
+  return fileName ? stripPlaylistFileExtension(fileName) : "";
+}
+
+function buildPlaylistLibraryFileName(name) {
+  const baseName = sanitizePlaylistBaseName(stripPlaylistFileExtension(name));
+  if (!baseName) {
+    throw new Error("Enter a playlist name before saving to the Library.");
+  }
+  return `${baseName}${PLAYLIST_FILE_EXTENSION}`;
+}
+
+function sanitizePlaylistBaseName(name) {
+  return String(name || "")
+    .replace(/[\\/]+/g, "/")
+    .split("/")
+    .pop()
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "")
+    .trim()
+    .replace(/[ .]+$/g, "");
+}
+
+function stripPlaylistFileExtension(fileName) {
+  return String(fileName || "").trim().replace(/\.(?:fhplaylist|json)$/i, "");
+}
+
+async function savePlaylistToLibrary(fileName) {
+  const currentEntry = getCurrentEntry();
+  if (currentEntry) {
+    validateCurrentFormForPersistence(currentEntry);
+    applyCurrentFormToEntry(currentEntry);
+  }
+
+  state.playbackMode = normalizePlaybackMode(ui.playlistMode.value);
+  const previousLibraryFileName = state.playlistLibraryFileName;
+  const persistence = await persistPlaylistEntrySourcesForSave({ forceLibraryCopy: true });
+  const playlistDocument = buildSavedPlaylistDocument();
+  const content = `${JSON.stringify(playlistDocument, null, 2)}\n`;
+  const result = await uploadTextToLibrary("exports", fileName, content);
+  const savedFileName = result.fileName || fileName;
+  let replacedFileName = "";
+  if (previousLibraryFileName && previousLibraryFileName !== savedFileName) {
+    await deleteLibraryFileByName("exports", previousLibraryFileName, { ignoreNotFound: true });
+    replacedFileName = previousLibraryFileName;
+  }
+  state.playlistFileName = savedFileName;
+  state.playlistLibraryFileName = savedFileName;
+  renderPlaylist();
+  renderStatus();
+  ui.playlistSummary.textContent = `Playlist saved: ${savedFileName}`;
+  return {
+    fileName,
+    result,
+    persistence,
+    replacedFileName,
+  };
 }
 
 function updateSelectedEntrySettings() {
@@ -1602,15 +2467,6 @@ async function saveSelectedEntryToFunscript() {
     return;
   }
 
-  try {
-    validateCurrentFormForPersistence(entry);
-  } catch (error) {
-    appendLog({ ok: false, title: "Funscript not saved", detail: String(error) });
-    return;
-  }
-
-  applyCurrentFormToEntry(entry);
-
   const updatedDocument = buildSavedFunscriptDocument(entry);
   const content = `${JSON.stringify(updatedDocument, null, 2)}\n`;
 
@@ -1622,13 +2478,13 @@ async function saveSelectedEntryToFunscript() {
         ok: true,
         title: "Funscript saved",
         detail:
-          `${entry.funscriptName} was overwritten in place. Only FHPlayer metadata values were updated.\n` +
+          `${entry.funscriptName} was overwritten in place without FHPlayer playlist-only rule metadata.\n` +
           `Target: ${result.name || entry.funscriptName}`,
       });
       return;
     }
 
-    if (typeof window.showSaveFilePicker === "function") {
+    if (canUseNativeSaveFilePicker()) {
       const handle = await window.showSaveFilePicker({
         suggestedName: entry.funscriptName,
         types: [
@@ -1649,7 +2505,7 @@ async function saveSelectedEntryToFunscript() {
       appendLog({
         ok: true,
         title: "Funscript saved",
-        detail: `${entry.funscriptName} was updated with FHPlayer settings under metadata.fhplayer.`,
+        detail: `${entry.funscriptName} was saved without FHPlayer playlist-only rule metadata.`,
       });
       return;
     }
@@ -1671,8 +2527,8 @@ async function saveSelectedEntryToFunscript() {
     entry.scriptDocument = updatedDocument;
     appendLog({
       ok: true,
-      title: "Funscript download prepared",
-      detail: `Your browser does not support direct file saving here. Downloaded ${entry.funscriptName} with metadata.fhplayer settings.`,
+        title: "Funscript download prepared",
+        detail: `Your browser does not support direct file saving here. Downloaded ${entry.funscriptName} without FHPlayer playlist-only rule metadata.`,
     });
   } catch (error) {
     if (error?.name === "AbortError") {
@@ -1692,12 +2548,850 @@ async function saveSelectedEntryToFunscript() {
   }
 }
 
+async function savePlaylistToFile() {
+  if (!state.playlist.length) {
+    ui.playlistSummary.textContent = "Playlist not saved. Add at least one entry first.";
+    appendLog({ ok: false, title: "Playlist not saved", detail: "Add at least one playlist entry first." });
+    return;
+  }
+
+  const currentEntry = getCurrentEntry();
+  if (currentEntry) {
+    try {
+      validateCurrentFormForPersistence(currentEntry);
+      applyCurrentFormToEntry(currentEntry);
+    } catch (error) {
+      ui.playlistSummary.textContent = "Playlist not saved. Check the selected entry settings.";
+      appendLog({ ok: false, title: "Playlist not saved", detail: String(error) });
+      return;
+    }
+  }
+
+  state.playbackMode = normalizePlaybackMode(ui.playlistMode.value);
+  const suggestedName = buildSuggestedPlaylistFileName();
+
+  try {
+    if (canUseNativeSaveFilePicker()) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName,
+        types: [
+          {
+            description: "FHPlayer playlists",
+            accept: {
+              "application/json": [PLAYLIST_FILE_EXTENSION, ".json"],
+            },
+          },
+        ],
+      });
+
+      const persistence = await persistPlaylistEntrySourcesForSave();
+      const playlistDocument = buildSavedPlaylistDocument();
+      const content = `${JSON.stringify(playlistDocument, null, 2)}\n`;
+      const writable = await handle.createWritable();
+      await writable.write(content);
+      await writable.close();
+
+      state.playlistFileName = suggestedName;
+      state.playlistLibraryFileName = "";
+      renderPlaylist();
+      renderStatus();
+      ui.playlistSummary.textContent = `Playlist saved: ${suggestedName}`;
+      appendLog({
+        ok: true,
+        title: "Playlist saved",
+        detail: formatPlaylistPersistenceDetail(
+          `${state.playlist.length} entr${state.playlist.length === 1 ? "y" : "ies"} saved to ${suggestedName}.`,
+          persistence,
+        ),
+      });
+      return;
+    }
+
+    const persistence = await persistPlaylistEntrySourcesForSave();
+    const playlistDocument = buildSavedPlaylistDocument();
+    const content = `${JSON.stringify(playlistDocument, null, 2)}\n`;
+
+    if (state.library.available && state.library.capabilities.import) {
+      const result = await uploadTextToLibrary("exports", suggestedName, content);
+      state.playlistFileName = result.fileName || suggestedName;
+      state.playlistLibraryFileName = result.fileName || suggestedName;
+      renderPlaylist();
+      renderStatus();
+      ui.playlistSummary.textContent = `Playlist saved: ${result.fileName || suggestedName}`;
+      appendLog({
+        ok: true,
+        title: "Playlist saved",
+        detail: formatPlaylistPersistenceDetail(
+          `${suggestedName} was saved into the FHPlayer export folder.\n` +
+            `Path: ${result.path || state.library.directories.exports || "-"}`,
+          persistence,
+        ),
+      });
+      return;
+    }
+
+    downloadTextFile(content, suggestedName, PLAYLIST_MIME_TYPE);
+    state.playlistFileName = suggestedName;
+    state.playlistLibraryFileName = "";
+    renderPlaylist();
+    renderStatus();
+    ui.playlistSummary.textContent = `Playlist download prepared: ${suggestedName}`;
+    appendLog({
+      ok: true,
+      title: "Playlist download prepared",
+      detail: formatPlaylistPersistenceDetail(`Downloaded ${suggestedName}.`, persistence),
+    });
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      ui.playlistSummary.textContent = "Playlist save cancelled.";
+      appendLog({ ok: false, title: "Save cancelled", detail: "The playlist was not changed." });
+      return;
+    }
+
+    ui.playlistSummary.textContent = "Playlist could not be saved.";
+    appendLog({ ok: false, title: "Could not save playlist", detail: String(error) });
+  }
+}
+
+async function openPlaylistFilePicker() {
+  if (canUseNativeOpenFilePicker()) {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        multiple: false,
+        types: [
+          {
+            description: "FHPlayer playlists",
+            accept: {
+              "application/json": [PLAYLIST_FILE_EXTENSION, ".json"],
+            },
+          },
+        ],
+      });
+      if (!handle) {
+        return;
+      }
+      await loadPlaylistFromFile(await handle.getFile());
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        return;
+      }
+      appendLog({ ok: false, title: "Could not load playlist", detail: String(error) });
+    }
+    return;
+  }
+
+  ui.playlistFile.value = "";
+  ui.playlistFile.click();
+}
+
+async function handlePlaylistFileSelection() {
+  const [file] = Array.from(ui.playlistFile.files ?? []);
+  ui.playlistFile.value = "";
+  if (!file) {
+    return;
+  }
+
+  await loadPlaylistFromFile(file);
+}
+
+async function loadPlaylistFromFile(file, options = {}) {
+  let playlistDocument;
+  try {
+    playlistDocument = JSON.parse(await file.text());
+  } catch (error) {
+    appendLog({ ok: false, title: "Could not load playlist", detail: `Invalid playlist JSON: ${String(error)}` });
+    return;
+  }
+
+  let loadedEntries;
+  let playbackMode;
+  let playlistLovense;
+  try {
+    const normalizedPlaylist = normalizeSavedPlaylistDocument(playlistDocument);
+    loadedEntries = await Promise.all(
+      normalizedPlaylist.entries.map((entry, index) => createPlaylistEntryFromSavedForLoad(entry, index, normalizedPlaylist.lovense)),
+    );
+    playbackMode = normalizedPlaylist.playbackMode;
+    playlistLovense = normalizedPlaylist.lovense;
+  } catch (error) {
+    appendLog({ ok: false, title: "Could not load playlist", detail: String(error) });
+    return;
+  }
+
+  if (state.playlist.length) {
+    const { confirmed } = await showConfirmationModal({
+      title: "Load playlist",
+      subtitle: file.name,
+      body: "Loading this playlist replaces the entries currently shown in FHPlayer.",
+      confirmLabel: "Load playlist",
+      cancelLabel: "Cancel",
+    });
+    if (!confirmed) {
+      loadedEntries.forEach(revokeEntryResources);
+      appendLog({ ok: false, title: "Load cancelled", detail: "The current playlist was kept." });
+      return;
+    }
+  }
+
+  replacePlaylist(loadedEntries, playbackMode, playlistLovense);
+  state.playlistFileName = String(file.name || "");
+  state.playlistLibraryFileName = String(options.libraryFileName || "");
+  appendLog({
+    ok: true,
+    title: "Playlist loaded",
+    detail: formatPlaylistLoadDetail(file.name, loadedEntries),
+  });
+}
+
+function replacePlaylist(entries, playbackMode, playlistLovense = null) {
+  stopSchedulerLoop();
+  clearScheduledLovenseActions();
+  sendLovenseStopForCurrentEntry(null, { force: true });
+  state.ruleExecutionPaused = false;
+  state.suppressNextPauseStop = false;
+  state.playlist.forEach(revokeEntryResources);
+  state.playlistLovense = buildPlaylistLovenseConfigWithoutRules(playlistLovense || inferPlaylistLovenseFromEntries(entries));
+  state.playlist = entries;
+  syncPlaylistLovenseUsersToEntries();
+  state.playbackMode = normalizePlaybackMode(playbackMode);
+  ui.playlistMode.value = state.playbackMode;
+  state.currentEntryId = null;
+  state.nextActionIndex = 0;
+  state.lastTriggeredIndex = null;
+  highlightActionRow(null);
+  ui.video.pause();
+  ui.video.removeAttribute("src");
+  ui.video.load();
+
+  if (entries.length) {
+    loadEntry(entries[0].id);
+    return;
+  }
+
+  clearCurrentEntry();
+}
+
+async function persistPlaylistEntrySourcesForSave(options = {}) {
+  const summary = {
+    importedVideos: 0,
+    importedFunscripts: 0,
+    warnings: [],
+  };
+
+  for (const entry of state.playlist) {
+    await persistEntryVideoSourceForSave(entry, summary, options);
+    await persistEntryFunscriptSourceForSave(entry, summary, options);
+  }
+
+  return summary;
+}
+
+async function persistEntryVideoSourceForSave(entry, summary, options = {}) {
+  const { forceLibraryCopy = false } = options;
+  const videoName = entry.videoName || `${entry.title || "playlist-entry"}.mp4`;
+  const currentSource = normalizeMediaSource(entry.videoSource, "videos", videoName);
+  if (forceLibraryCopy) {
+    const result = await copyEntryVideoToLibrary(entry, currentSource, videoName);
+    if (result) {
+      entry.videoName = result.fileName || videoName;
+      entry.videoSource = buildLibraryMediaSource("videos", entry.videoName, result.path);
+      if (result.copied) {
+        summary.importedVideos += 1;
+      }
+      return;
+    }
+
+    summary.warnings.push(`Video could not be copied to the library for ${entry.title || videoName || "a playlist entry"}.`);
+    return;
+  }
+
+  if (currentSource.path || currentSource.uri) {
+    entry.videoSource = currentSource;
+    return;
+  }
+
+  if (entry.videoFile && state.library.available && state.library.capabilities.import) {
+    const result = await uploadFileToLibrary("videos", entry.videoFile);
+    entry.videoName = result.fileName || videoName;
+    entry.videoSource = buildLibraryMediaSource("videos", entry.videoName, result.path);
+    summary.importedVideos += 1;
+    return;
+  }
+
+  if (videoName && state.library.available) {
+    entry.videoSource = buildLibraryMediaSource("videos", videoName);
+    return;
+  }
+
+  summary.warnings.push(`No persistable video path is available for ${entry.title || videoName || "a playlist entry"}.`);
+}
+
+async function persistEntryFunscriptSourceForSave(entry, summary, options = {}) {
+  const { forceLibraryCopy = false } = options;
+  const funscriptName = entry.funscriptName || `${entry.title || "playlist-entry"}.funscript`;
+  const currentSource = normalizeMediaSource(entry.funscriptSource, "funscripts", funscriptName);
+  if (forceLibraryCopy) {
+    const result = await copyEntryFunscriptToLibrary(entry, currentSource, funscriptName);
+    if (result) {
+      entry.funscriptName = result.fileName || funscriptName;
+      entry.funscriptSource = {
+        ...buildLibraryMediaSource("funscripts", entry.funscriptName, result.path),
+        token: currentSource.token,
+      };
+      if (result.copied) {
+        summary.importedFunscripts += 1;
+      }
+      return;
+    }
+
+    summary.warnings.push(`Funscript could not be copied to the library for ${entry.title || funscriptName || "a playlist entry"}.`);
+    return;
+  }
+
+  if (currentSource.path || currentSource.uri) {
+    entry.funscriptSource = currentSource;
+    return;
+  }
+
+  if (entry.funscriptFile && state.library.available && state.library.capabilities.import) {
+    const result = await uploadFileToLibrary("funscripts", entry.funscriptFile);
+    entry.funscriptName = result.fileName || funscriptName;
+    entry.funscriptSource = {
+      ...buildLibraryMediaSource("funscripts", entry.funscriptName, result.path),
+      token: currentSource.token,
+    };
+    summary.importedFunscripts += 1;
+    return;
+  }
+
+  if (entry.scriptDocument && state.library.available && state.library.capabilities.import) {
+    const content = `${JSON.stringify(buildSavedFunscriptDocument(entry), null, 2)}\n`;
+    const result = await uploadTextToLibrary("funscripts", funscriptName, content);
+    entry.funscriptName = result.fileName || funscriptName;
+    entry.funscriptSource = {
+      ...buildLibraryMediaSource("funscripts", entry.funscriptName, result.path),
+      token: currentSource.token,
+    };
+    summary.importedFunscripts += 1;
+    return;
+  }
+
+  if (funscriptName && state.library.available) {
+    entry.funscriptSource = buildLibraryMediaSource("funscripts", funscriptName);
+    return;
+  }
+
+  summary.warnings.push(`No persistable funscript path is available for ${entry.title || funscriptName || "a playlist entry"}.`);
+}
+
+async function copyEntryVideoToLibrary(entry, currentSource, videoName) {
+  if (!state.library.available || !state.library.capabilities.import) {
+    return null;
+  }
+
+  if (isLibraryMediaSource(currentSource)) {
+    return {
+      copied: false,
+      fileName: currentSource.libraryName || currentSource.name || videoName,
+      path: currentSource.path || buildManagedLibraryPath("videos", currentSource.libraryName || currentSource.name || videoName),
+    };
+  }
+
+  if (entry.videoFile) {
+    return {
+      copied: true,
+      ...(await uploadFileToLibrary("videos", entry.videoFile)),
+    };
+  }
+
+  if (currentSource.uri && canServeAndroidDocuments()) {
+    return {
+      copied: true,
+      ...(await importAndroidDocumentToLibrary("videos", videoName, currentSource.uri)),
+    };
+  }
+
+  const candidates = buildVideoUrlCandidates(currentSource, videoName).filter((candidate) => candidate.source !== "library");
+  for (const candidate of candidates) {
+    try {
+      return {
+        copied: true,
+        ...(await uploadUrlToLibrary("videos", videoName, candidate.url)),
+      };
+    } catch (_error) {
+      // Continue with the next persisted source candidate.
+    }
+  }
+
+  return null;
+}
+
+async function copyEntryFunscriptToLibrary(entry, currentSource, funscriptName) {
+  if (!state.library.available || !state.library.capabilities.import) {
+    return null;
+  }
+
+  if (isLibraryMediaSource(currentSource)) {
+    return {
+      copied: false,
+      fileName: currentSource.libraryName || currentSource.name || funscriptName,
+      path: currentSource.path || buildManagedLibraryPath("funscripts", currentSource.libraryName || currentSource.name || funscriptName),
+    };
+  }
+
+  if (entry.funscriptFile) {
+    return {
+      copied: true,
+      ...(await uploadFileToLibrary("funscripts", entry.funscriptFile)),
+    };
+  }
+
+  if (currentSource.uri && canServeAndroidDocuments()) {
+    return {
+      copied: true,
+      ...(await importAndroidDocumentToLibrary("funscripts", funscriptName, currentSource.uri)),
+    };
+  }
+
+  const candidates = buildFunscriptUrlCandidates(currentSource, funscriptName).filter((candidate) => candidate.source !== "library");
+  for (const candidate of candidates) {
+    try {
+      return {
+        copied: true,
+        ...(await uploadUrlToLibrary("funscripts", funscriptName, candidate.url)),
+      };
+    } catch (_error) {
+      // Continue with the next persisted source candidate.
+    }
+  }
+
+  if (entry.scriptDocument) {
+    const content = `${JSON.stringify(buildSavedFunscriptDocument(entry), null, 2)}\n`;
+    return {
+      copied: true,
+      ...(await uploadTextToLibrary("funscripts", funscriptName, content)),
+    };
+  }
+
+  return null;
+}
+
+function isLibraryMediaSource(source) {
+  return normalizeMediaSource(source, source?.kind || "", source?.name || "").source === "library";
+}
+
+function formatPlaylistPersistenceDetail(baseDetail, summary) {
+  const lines = [baseDetail];
+  if (summary.importedVideos || summary.importedFunscripts) {
+    lines.push(
+      `Persisted media paths: ${summary.importedVideos} video(s), ${summary.importedFunscripts} funscript(s) copied to the FHPlayer library.`,
+    );
+  }
+  if (summary.warnings.length) {
+    lines.push(`Warnings: ${summary.warnings.join(" ")}`);
+  }
+  return lines.join("\n");
+}
+
+function formatPlaylistLoadDetail(fileName, entries) {
+  const warnings = entries.flatMap((entry) => entry.loadWarnings || []);
+  const lines = [
+    `${fileName} loaded with ${entries.length} entr${entries.length === 1 ? "y" : "ies"}.`,
+    "Saved media paths are used first; library filenames and embedded funscript data are used as fallbacks.",
+  ];
+  if (warnings.length) {
+    lines.push(`Warnings: ${warnings.join(" ")}`);
+  }
+  return lines.join("\n");
+}
+
+function buildSavedPlaylistDocument() {
+  syncPlaylistLovenseFromForm();
+  syncPlaylistLovenseUsersToEntries();
+  return {
+    schemaVersion: PLAYLIST_SCHEMA_VERSION,
+    type: "fhplayer-playlist",
+    createdAt: new Date().toISOString(),
+    playbackMode: normalizePlaybackMode(state.playbackMode),
+    lovense: buildSavedPlaylistLovense(),
+    entries: state.playlist.map((entry, index) => buildSavedPlaylistEntry(entry, index)),
+  };
+}
+
+function buildSavedPlaylistLovense() {
+  const normalizedLovense = buildPlaylistLovenseConfigWithoutRules(state.playlistLovense);
+  return {
+    selectedConnectionId: normalizedLovense.selectedConnectionId,
+    connections: normalizedLovense.connections.map((connection) => ({
+      ...connection,
+      rulesText: undefined,
+    })),
+    testSelectedToys: normalizedLovense.testSelectedToys,
+    testToyId: normalizedLovense.testToyId,
+    testToyName: normalizedLovense.testToyName,
+    testToyType: normalizedLovense.testToyType,
+    testCapabilities: normalizedLovense.testCapabilities,
+  };
+}
+
+function buildSavedPlaylistEntry(entry, index) {
+  const normalizedLovense = normalizeLovenseConfig(entry.lovense);
+  const videoName = entry.videoName || `${entry.title || `playlist-entry-${index + 1}`}.mp4`;
+  const funscriptName = entry.funscriptName || `entry-${index + 1}.funscript`;
+  const videoSource = getEntryMediaSourceForSave(entry, "videos", videoName);
+  const funscriptSource = getEntryMediaSourceForSave(entry, "funscripts", funscriptName);
+  return {
+    title: entry.title || `Playlist entry ${index + 1}`,
+    video: buildSavedMediaReference(videoName, videoSource),
+    funscript: {
+      ...buildSavedMediaReference(funscriptName, funscriptSource),
+      document: buildSavedFunscriptDocument(entry),
+    },
+    execution: {
+      mode: normalizeExecutionMode(entry.executionMode),
+      rulesText: normalizeRulesText(entry.rulesText),
+      lovense: {
+        selectedConnectionId: normalizedLovense.selectedConnectionId,
+        activeConnectionIds: normalizedLovense.activeConnectionIds,
+        connectionRules: normalizedLovense.connections.map((connection) => ({
+          connectionId: connection.id,
+          rulesText: resolveConnectionRulesText(connection, entry.rulesText),
+        })),
+      },
+    },
+  };
+}
+
+function buildSavedMediaReference(fileName, source) {
+  const normalizedSource = normalizeMediaSource(source, source?.kind || "", fileName);
+  const reference = {
+    name: fileName,
+    source: normalizedSource.source || "library",
+  };
+  if (normalizedSource.path) {
+    reference.path = normalizedSource.path;
+  }
+  if (normalizedSource.uri) {
+    reference.uri = normalizedSource.uri;
+  }
+  if (normalizedSource.token) {
+    reference.token = normalizedSource.token;
+  }
+  if (normalizedSource.libraryName && normalizedSource.libraryName !== fileName) {
+    reference.libraryName = normalizedSource.libraryName;
+  }
+  return reference;
+}
+
+function getEntryMediaSourceForSave(entry, kind, fileName) {
+  const existingSource = kind === "videos" ? entry.videoSource : entry.funscriptSource;
+  const normalizedSource = normalizeMediaSource(existingSource, kind, fileName);
+  if (normalizedSource.path || normalizedSource.uri) {
+    return normalizedSource;
+  }
+  return buildLibraryMediaSource(kind, normalizedSource.libraryName || normalizedSource.name || fileName);
+}
+
+function buildLibraryMediaSource(kind, fileName, path = "") {
+  return normalizeMediaSource(
+    {
+      kind,
+      name: fileName,
+      libraryName: fileName,
+      source: "library",
+      path: path || buildManagedLibraryPath(kind, fileName),
+    },
+    kind,
+    fileName,
+  );
+}
+
+function normalizeMediaSource(source, kind, fallbackName = "") {
+  const normalizedKind = normalizeLibraryKind(kind || source?.kind || "");
+  const name = firstNonEmpty(source?.name, source?.fileName, fallbackName);
+  const libraryName = firstNonEmpty(source?.libraryName, source?.libraryFileName, name);
+  return {
+    kind: normalizedKind,
+    source: firstNonEmpty(source?.source, source?.type, "library"),
+    name,
+    libraryName,
+    path: firstNonEmpty(source?.path, source?.filePath),
+    uri: firstNonEmpty(source?.uri, source?.documentUri),
+    token: firstNonEmpty(source?.token),
+    mimeType: firstNonEmpty(source?.mimeType),
+    sizeBytes: Number.isFinite(Number(source?.sizeBytes)) ? Number(source.sizeBytes) : null,
+  };
+}
+
+function normalizeLibraryKind(kind) {
+  const normalizedKind = String(kind || "").trim().toLowerCase();
+  if (normalizedKind === "video") {
+    return "videos";
+  }
+  if (normalizedKind === "funscript") {
+    return "funscripts";
+  }
+  return normalizedKind;
+}
+
+function buildManagedLibraryPath(kind, fileName) {
+  const normalizedKind = normalizeLibraryKind(kind);
+  const directory = state.library.directories[normalizedKind] || "";
+  if (!directory || !fileName) {
+    return "";
+  }
+  const separator = directory.includes("\\") ? "\\" : "/";
+  return `${directory.replace(/[\\/]+$/, "")}${separator}${fileName}`;
+}
+
+function normalizeSavedPlaylistDocument(payload) {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Playlist file must contain a JSON object.");
+  }
+
+  const entries = Array.isArray(payload.entries) ? payload.entries : [];
+  if (!entries.length) {
+    throw new Error("Playlist file contains no entries.");
+  }
+
+  const schemaVersion = Number(payload.schemaVersion ?? payload.schema_version ?? PLAYLIST_SCHEMA_VERSION);
+  if (!Number.isInteger(schemaVersion) || schemaVersion < 1 || schemaVersion > PLAYLIST_SCHEMA_VERSION) {
+    throw new Error(`Unsupported playlist schema version: ${payload.schemaVersion ?? payload.schema_version}`);
+  }
+
+  const playlistLovensePayload = payload.lovense || payload.lovenseUsers || payload.playlistLovense || null;
+  return {
+    playbackMode: normalizePlaybackMode(payload.playbackMode),
+    lovense: playlistLovensePayload ? normalizeLovenseConfig(playlistLovensePayload) : null,
+    entries,
+  };
+}
+
+function createPlaylistEntryFromSaved(savedEntry, index, playlistLovense = null) {
+  if (!savedEntry || typeof savedEntry !== "object") {
+    throw new Error(`Playlist entry ${index + 1} is invalid.`);
+  }
+
+  const video = savedEntry.video && typeof savedEntry.video === "object" ? savedEntry.video : {};
+  const funscript = savedEntry.funscript && typeof savedEntry.funscript === "object" ? savedEntry.funscript : {};
+  const execution = savedEntry.execution && typeof savedEntry.execution === "object" ? savedEntry.execution : {};
+  const videoName = firstNonEmpty(video.name, savedEntry.videoName, savedEntry.fileName, savedEntry.title);
+  const funscriptName = firstNonEmpty(funscript.name, savedEntry.funscriptName, "playlist-entry.funscript");
+  const scriptDocument = cloneJson(funscript.document || savedEntry.scriptDocument || { actions: [] });
+  const videoSource = normalizeMediaSource(
+    {
+      ...video,
+      kind: "videos",
+      path: firstNonEmpty(video.path, savedEntry.videoPath),
+      name: videoName,
+    },
+    "videos",
+    videoName,
+  );
+  const funscriptSource = normalizeMediaSource(
+    {
+      ...funscript,
+      kind: "funscripts",
+      path: firstNonEmpty(funscript.path, savedEntry.funscriptPath),
+      name: funscriptName,
+    },
+    "funscripts",
+    funscriptName,
+  );
+
+  if (!Array.isArray(scriptDocument.actions) && Array.isArray(savedEntry.actions)) {
+    scriptDocument.actions = cloneJson(savedEntry.actions);
+  }
+
+  const title = firstNonEmpty(savedEntry.title, videoName ? stripExtension(videoName) : "", `Playlist entry ${index + 1}`);
+  return {
+    id: `entry-${state.playlistCounter += 1}`,
+    title,
+    videoName,
+    videoUrl: buildPlayableVideoUrl(videoSource, videoName),
+    videoSource,
+    funscriptName,
+    actions: extractFunscriptActions(scriptDocument),
+    range: scriptDocument.range ?? "-",
+    inverted: Boolean(scriptDocument.inverted),
+    scriptDocument,
+    funscriptSource,
+    loadWarnings: [],
+    executionMode: normalizeExecutionMode(execution.mode || savedEntry.executionMode),
+    rulesText: normalizeRulesText(execution.rulesText || savedEntry.rulesText),
+    lovense: normalizeEntryLovenseConfig(
+      execution.lovense || savedEntry.lovense,
+      execution.rulesText || savedEntry.rulesText,
+      playlistLovense,
+    ),
+  };
+}
+
+async function createPlaylistEntryFromSavedForLoad(savedEntry, index, playlistLovense = null) {
+  const entry = createPlaylistEntryFromSaved(savedEntry, index, playlistLovense);
+  const warnings = [];
+  entry.videoUrl = await resolveSavedVideoUrl(entry.videoSource, entry.videoName, warnings);
+
+  const loadedScript = await loadSavedFunscriptDocument(entry.funscriptSource, entry.scriptDocument, entry.funscriptName, warnings);
+  entry.scriptDocument = loadedScript.document;
+  entry.actions = extractFunscriptActions(loadedScript.document);
+  entry.range = loadedScript.document.range ?? "-";
+  entry.inverted = Boolean(loadedScript.document.inverted);
+  entry.loadWarnings = warnings;
+  return entry;
+}
+
+async function resolveSavedVideoUrl(source, videoName, warnings) {
+  const candidates = buildVideoUrlCandidates(source, videoName);
+  for (const candidate of candidates) {
+    if (await resourceExists(candidate.url)) {
+      return candidate.url;
+    }
+  }
+
+  if (candidates.length) {
+    warnings.push(`Video file could not be loaded; keeping ${videoName || source?.path || "the playlist entry"} without a video source.`);
+    return "";
+  }
+
+  warnings.push(`Video source is missing for ${videoName || "playlist entry"}.`);
+  return "";
+}
+
+async function loadSavedFunscriptDocument(source, embeddedDocument, funscriptName, warnings) {
+  const candidates = buildFunscriptUrlCandidates(source, funscriptName);
+  for (const candidate of candidates) {
+    try {
+      const document = await fetchJsonFile(candidate.url);
+      return { document, source: candidate.source };
+    } catch (_error) {
+      // Continue with the next persisted source, then fall back to the embedded playlist copy.
+    }
+  }
+
+  if (embeddedDocument && Array.isArray(embeddedDocument.actions)) {
+    if (candidates.length) {
+      warnings.push(`Funscript file could not be loaded; using embedded playlist copy for ${funscriptName}.`);
+    }
+    return { document: embeddedDocument, source: "embedded" };
+  }
+
+  warnings.push(`Funscript source is missing for ${funscriptName || "playlist entry"}.`);
+  return { document: { actions: [] }, source: "missing" };
+}
+
+function buildVideoUrlCandidates(source, videoName) {
+  const candidates = [];
+  const normalizedSource = normalizeMediaSource(source, "videos", videoName);
+  if (normalizedSource.uri && canServeAndroidDocuments()) {
+    candidates.push({ source: "android-document", url: buildAndroidDocumentFileUrl("videos", normalizedSource.uri) });
+  }
+  if (normalizedSource.path && canServeLocalFiles()) {
+    candidates.push({ source: "path", url: buildLocalFileUrl("videos", normalizedSource.path) });
+  }
+  const libraryName = normalizedSource.libraryName || normalizedSource.name || videoName;
+  if (libraryName) {
+    candidates.push({ source: "library", url: buildLibraryFileUrl("videos", libraryName) });
+  }
+  return uniqueUrlCandidates(candidates);
+}
+
+function buildFunscriptUrlCandidates(source, funscriptName) {
+  const candidates = [];
+  const normalizedSource = normalizeMediaSource(source, "funscripts", funscriptName);
+  if (normalizedSource.uri && canServeAndroidDocuments()) {
+    candidates.push({ source: "android-document", url: buildAndroidDocumentFileUrl("funscripts", normalizedSource.uri) });
+  }
+  if (normalizedSource.path && canServeLocalFiles()) {
+    candidates.push({ source: "path", url: buildLocalFileUrl("funscripts", normalizedSource.path) });
+  }
+  const libraryName = normalizedSource.libraryName || normalizedSource.name || funscriptName;
+  if (libraryName && state.library.capabilities.serve) {
+    candidates.push({ source: "library", url: buildLibraryFileUrl("funscripts", libraryName) });
+  }
+  return uniqueUrlCandidates(candidates);
+}
+
+function uniqueUrlCandidates(candidates) {
+  const seenUrls = new Set();
+  return candidates.filter((candidate) => {
+    if (!candidate.url || seenUrls.has(candidate.url)) {
+      return false;
+    }
+    seenUrls.add(candidate.url);
+    return true;
+  });
+}
+
+async function resourceExists(url) {
+  try {
+    const response = await fetch(url, { method: "HEAD", cache: "no-store" });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function fetchJsonFile(url) {
+  const response = await fetch(url, { cache: "no-store" });
+  const text = await response.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Invalid JSON file: ${String(error)}`);
+  }
+  if (!response.ok) {
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
+function buildPlayableVideoUrl(source, videoName) {
+  const candidates = buildVideoUrlCandidates(source, videoName);
+  return candidates[0]?.url || "";
+}
+
+function canServeLocalFiles() {
+  return state.library.capabilities.localFiles === true;
+}
+
+function canServeAndroidDocuments() {
+  return state.backendCapabilities.platform === "android";
+}
+
+function buildSuggestedPlaylistFileName() {
+  const timestamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
+  return `fhplayer-playlist-${timestamp}${PLAYLIST_FILE_EXTENSION}`;
+}
+
+function canUseNativeSaveFilePicker() {
+  return state.backendCapabilities.platform !== "android" && typeof window.showSaveFilePicker === "function";
+}
+
+function canUseNativeOpenFilePicker() {
+  return state.backendCapabilities.platform !== "android" && typeof window.showOpenFilePicker === "function";
+}
+
 function loadSelectedEntryIntoPlayer() {
   if (!state.currentEntryId) {
     appendLog({ ok: false, title: "No playlist entry selected", detail: "Please select an entry first." });
     return;
   }
   loadEntry(state.currentEntryId);
+}
+
+function playPreviousPlaylistEntry() {
+  const previousEntryId = getPreviousEntryId();
+  if (!previousEntryId) {
+    appendLog({
+      ok: false,
+      title: "No previous video available",
+      detail: "There is no previous entry in the current playlist.",
+    });
+    return;
+  }
+  loadEntry(previousEntryId, { autoplay: !ui.video.paused });
 }
 
 function playNextPlaylistEntry() {
@@ -1736,6 +3430,8 @@ function removeSelectedEntry() {
 function clearPlaylist() {
   state.playlist.forEach(revokeEntryResources);
   state.playlist = [];
+  state.playlistFileName = "";
+  state.playlistLibraryFileName = "";
   clearCurrentEntry();
   renderPlaylist();
   renderStatus();
@@ -1743,27 +3439,250 @@ function clearPlaylist() {
 }
 
 function toggleArmedState() {
-  state.armed = !state.armed;
-  if (!state.armed) {
-    clearScheduledLovenseActions();
-    sendLovenseStopForCurrentEntry("Execution disabled. Sent stop to the selected Lovense devices.", { force: true });
-  }
+  state.ruleExecutionPaused = false;
+  syncSchedulerFromCurrentTime();
   renderStatus();
   appendLog({
     ok: true,
-    title: state.armed ? "Execution enabled" : "Execution disabled",
-    detail: state.armed ? "Actions will be executed during playback." : "Actions will not be sent to the backend.",
+    title: "Rule script active",
+    detail: "Rule scripts are always executed during playback.",
   });
 }
 
 function resetScheduler() {
   clearScheduledLovenseActions();
+  state.ruleExecutionPaused = false;
   syncSchedulerFromCurrentTime();
   renderStatus();
 }
 
+function isRuleExecutionActive() {
+  return !state.ruleExecutionPaused;
+}
+
+function isLovenseLiveEntry(entry = getCurrentEntry()) {
+  return Boolean(entry && normalizeExecutionMode(entry.executionMode) === "lovense-live");
+}
+
+async function toggleLovenseEmergencyStop() {
+  const entry = getCurrentEntry();
+  if (!isLovenseLiveEntry(entry)) {
+    appendLog({
+      ok: false,
+      title: "Lovense stop unavailable",
+      detail: "Load a playlist entry in Lovense live mode before using the emergency stop.",
+    });
+    return;
+  }
+
+  if (state.ruleExecutionPaused) {
+    resumeLovenseExecution();
+    return;
+  }
+
+  state.ruleExecutionPaused = true;
+  clearScheduledLovenseActions();
+  const stopPromise = sendLovenseStopForCurrentEntry("Emergency stop: video paused and Lovense stop sent.", {
+    force: true,
+    logSkipped: true,
+  });
+  if (!ui.video.paused && !ui.video.ended) {
+    state.suppressNextPauseStop = true;
+    ui.video.pause();
+  }
+  showPlayerControls({ autoHide: false });
+  renderStatus();
+  await stopPromise;
+}
+
+function resumeLovenseExecution() {
+  state.ruleExecutionPaused = false;
+  clearScheduledLovenseActions();
+  syncSchedulerFromCurrentTime();
+  renderStatus();
+
+  if (!getCurrentEntry() || (!ui.video.currentSrc && !ui.video.src)) {
+    return;
+  }
+
+  ui.video.play().catch((error) => {
+    appendLog({ ok: false, title: "Resume blocked", detail: String(error) });
+  });
+}
+
+function isPlayerTouchOverlayMode() {
+  return state.backendCapabilities.platform === "android";
+}
+
+function arePlayerControlsLocked() {
+  return !getCurrentEntry() || ui.video.paused || ui.video.ended;
+}
+
+function clearPlayerControlsHideTimer() {
+  if (state.playerControlsHideTimer !== null) {
+    window.clearTimeout(state.playerControlsHideTimer);
+    state.playerControlsHideTimer = null;
+  }
+}
+
+function applyPlayerControlsVisibility() {
+  const locked = arePlayerControlsLocked();
+  if (locked) {
+    state.playerControlsVisible = true;
+    clearPlayerControlsHideTimer();
+  }
+
+  ui.playerShell.classList.toggle("controls-locked", locked);
+  ui.playerShell.classList.toggle("controls-visible", state.playerControlsVisible || locked);
+  ui.playerShell.classList.toggle("controls-hidden", !state.playerControlsVisible && !locked);
+}
+
+function schedulePlayerControlsAutoHide() {
+  clearPlayerControlsHideTimer();
+  if (arePlayerControlsLocked() || isPlayerTouchOverlayMode()) {
+    applyPlayerControlsVisibility();
+    return;
+  }
+
+  state.playerControlsHideTimer = window.setTimeout(() => {
+    hidePlayerControls();
+  }, PLAYER_CONTROLS_HIDE_DELAY_MS);
+}
+
+function showPlayerControls({ autoHide = true } = {}) {
+  state.playerControlsVisible = true;
+  applyPlayerControlsVisibility();
+  if (autoHide) {
+    schedulePlayerControlsAutoHide();
+  } else {
+    clearPlayerControlsHideTimer();
+  }
+}
+
+function hidePlayerControls() {
+  if (arePlayerControlsLocked()) {
+    showPlayerControls({ autoHide: false });
+    return;
+  }
+
+  clearPlayerControlsHideTimer();
+  state.playerControlsVisible = false;
+  applyPlayerControlsVisibility();
+}
+
+function handlePlayerMouseMove() {
+  if (isPlayerTouchOverlayMode()) {
+    return;
+  }
+
+  showPlayerControls();
+}
+
+function handlePlayerMouseLeave() {
+  if (isPlayerTouchOverlayMode() || arePlayerControlsLocked()) {
+    return;
+  }
+
+  hidePlayerControls();
+}
+
+function handlePlayerPointerDown(event) {
+  if (!isPlayerTouchOverlayMode() || event.target.closest("button, input, select, textarea, a")) {
+    return;
+  }
+
+  if (arePlayerControlsLocked()) {
+    showPlayerControls({ autoHide: false });
+    return;
+  }
+
+  if (state.playerControlsVisible) {
+    hidePlayerControls();
+  } else {
+    showPlayerControls({ autoHide: false });
+  }
+}
+
+function handleVideoSurfaceClick() {
+  if (isPlayerTouchOverlayMode()) {
+    return;
+  }
+
+  togglePlayerPlayback();
+}
+
+function togglePlayerPlayback() {
+  if (!getCurrentEntry()) {
+    const firstEntry = state.playlist[0] || null;
+    if (firstEntry) {
+      loadEntry(firstEntry.id, { autoplay: true });
+      return;
+    }
+    appendLog({ ok: false, title: "No playlist entry selected", detail: "Add or select a playlist entry first." });
+    return;
+  }
+
+  if (!ui.video.currentSrc && !ui.video.src) {
+    appendLog({ ok: false, title: "Video unavailable", detail: "The selected playlist entry has no playable video source." });
+    return;
+  }
+
+  if (ui.video.paused || ui.video.ended) {
+    ui.video.play().catch((error) => {
+      appendLog({ ok: false, title: "Playback blocked", detail: String(error) });
+    });
+    return;
+  }
+
+  ui.video.pause();
+}
+
+function handlePlayerSeekInput() {
+  if (!Number.isFinite(ui.video.duration) || ui.video.duration <= 0) {
+    return;
+  }
+
+  ui.video.currentTime = (Number(ui.playerSeek.value) / 1000) * ui.video.duration;
+  renderStatus();
+}
+
+function seekPlayerBy(deltaSeconds) {
+  const durationSeconds = Number(ui.video.duration);
+  const currentSeconds = Number(ui.video.currentTime);
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0 || !Number.isFinite(currentSeconds)) {
+    return;
+  }
+
+  ui.video.currentTime = Math.max(0, Math.min(durationSeconds, currentSeconds + deltaSeconds));
+  showPlayerControls({ autoHide: !isPlayerTouchOverlayMode() });
+  renderStatus();
+}
+
+function togglePlayerMute() {
+  ui.video.muted = !ui.video.muted;
+  renderStatus();
+}
+
+function handlePlayerVolumeInput() {
+  const nextVolume = Math.max(0, Math.min(1, Number(ui.playerVolume.value) / 100));
+  ui.video.volume = Number.isFinite(nextVolume) ? nextVolume : 1;
+  ui.video.muted = ui.video.volume === 0;
+  renderStatus();
+}
+
+function togglePlayerFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.();
+    return;
+  }
+
+  const fullscreenTarget = ui.playerShell || ui.video;
+  fullscreenTarget.requestFullscreen?.();
+}
+
 function handlePlaybackModeChange() {
-  state.playbackMode = ui.playlistMode.value;
+  state.playbackMode = normalizePlaybackMode(ui.playlistMode.value);
+  ui.playlistMode.value = state.playbackMode;
   renderStatus();
   renderPlaylist();
 }
@@ -1803,10 +3722,22 @@ function stopSchedulerLoop() {
   }
 }
 
+function handleVideoPlay() {
+  startSchedulerLoop();
+  hidePlayerControls();
+  renderStatus();
+}
+
 function handleVideoPause() {
   stopSchedulerLoop();
   clearScheduledLovenseActions();
-  sendLovenseStopForCurrentEntry("Playback paused. Sent stop to the selected Lovense devices.");
+  if (state.suppressNextPauseStop) {
+    state.suppressNextPauseStop = false;
+  } else {
+    sendLovenseStopForCurrentEntry("Playback paused. Sent stop to the selected Lovense devices.");
+  }
+  showPlayerControls({ autoHide: false });
+  renderStatus();
 }
 
 function processPlaybackPosition() {
@@ -1824,7 +3755,7 @@ function processPlaybackPosition() {
     highlightActionRow(action.index);
     renderStatus();
 
-    if (state.armed) {
+    if (isRuleExecutionActive()) {
       triggerAction(entry, action, currentMs);
     }
   }
@@ -1847,6 +3778,16 @@ function triggerAction(entry, action, currentMs) {
 
 async function triggerLovenseRuleAction(entry, action, currentMs) {
   const executionMode = normalizeExecutionMode(entry.executionMode);
+  const programs = getActiveLovenseRulePrograms(entry);
+  if (!programs.length) {
+    appendLog({
+      ok: false,
+      title: `Lovense action ${action.index} skipped`,
+      detail: "No Lovense users are active for the current playlist entry.",
+    });
+    return;
+  }
+
   const context = {
     index: action.index,
     atMs: action.atMs,
@@ -1855,29 +3796,76 @@ async function triggerLovenseRuleAction(entry, action, currentMs) {
     deltaMs: Math.round(currentMs - action.atMs),
   };
 
-  let commands;
-  try {
-    commands = evaluateLovenseRuleCommands(entry.rulesText, entry.lovense, context, {
-      requireToyId: executionMode === "lovense-live",
-      mode: executionMode === "lovense-test" ? "test" : "live",
-    }).commands;
-  } catch (error) {
-    appendLog({
-      ok: false,
-      title: `Lovense rule error at action ${action.index}`,
-      detail: String(error),
+  programs.forEach((program) => {
+    let commands;
+    try {
+      commands = evaluateLovenseRuleCommands(program.rulesText, program.lovense, context, {
+        requireToyId: executionMode === "lovense-live",
+        mode: program.mode,
+      }).commands;
+    } catch (error) {
+      appendLog({
+        ok: false,
+        title: `Lovense rule error for ${program.label} at action ${action.index}`,
+        detail: String(error),
+      });
+      return;
+    }
+
+    if (!commands.length) {
+      return;
+    }
+
+    const batches = groupLovenseCommandsByDelay(commands);
+    batches.forEach((batch, batchIndex) => {
+      scheduleLovenseCommandBatch(entry, action, batch, batchIndex === 0, program);
     });
-    return;
-  }
-
-  if (!commands.length) {
-    return;
-  }
-
-  const batches = groupLovenseCommandsByDelay(commands);
-  batches.forEach((batch, batchIndex) => {
-    scheduleLovenseCommandBatch(entry, action, batch, batchIndex === 0);
   });
+}
+
+function getActiveLovenseRulePrograms(entry) {
+  const executionMode = normalizeExecutionMode(entry.executionMode);
+  const normalizedLovense = normalizeLovenseConfig(entry.lovense);
+
+  if (executionMode === "lovense-test") {
+    return getActiveLiveConnections(normalizedLovense).map((connection) => ({
+      id: connection.id,
+      label: connection.label || "User",
+      mode: "test",
+      lovense: normalizeLovenseConfig({
+        ...normalizedLovense,
+        selectedConnectionId: connection.id,
+        activeConnectionIds: [connection.id],
+        testSelectedToys: (connection.testSelectedToys || []).length ? connection.testSelectedToys : normalizedLovense.testSelectedToys,
+      }),
+      rulesText: resolveConnectionRulesText(connection, entry.rulesText),
+    }));
+  }
+
+  if (executionMode !== "lovense-live") {
+    return [];
+  }
+
+  return getActiveLiveConnections(normalizedLovense).map((connection) => ({
+    id: connection.id,
+    label: connection.label || "User",
+    mode: "live",
+    lovense: normalizeLovenseConfig({
+      ...normalizedLovense,
+      selectedConnectionId: connection.id,
+      activeConnectionIds: [connection.id],
+    }),
+    rulesText: resolveConnectionRulesText(connection, entry.rulesText),
+  }));
+}
+
+function resolveConnectionRulesText(connection, fallbackRulesText = DEFAULT_RULES_TEXT) {
+  const connectionRulesText = normalizeRulesText(connection?.rulesText);
+  const fallback = normalizeRulesText(fallbackRulesText);
+  if (connectionRulesText !== DEFAULT_RULES_TEXT || fallback === DEFAULT_RULES_TEXT) {
+    return connectionRulesText;
+  }
+  return fallback;
 }
 
 function groupLovenseCommandsByDelay(commands) {
@@ -1895,14 +3883,14 @@ function groupLovenseCommandsByDelay(commands) {
     .map(([delayMs, groupedCommands]) => ({ delayMs, commands: groupedCommands }));
 }
 
-function scheduleLovenseCommandBatch(entry, action, batch, isFirstBatch) {
+function scheduleLovenseCommandBatch(entry, action, batch, isFirstBatch, program) {
   const executeBatch = () => {
     const currentEntry = getCurrentEntry();
-    if (!state.armed || !currentEntry || currentEntry.id !== entry.id) {
+    if (!isRuleExecutionActive() || !currentEntry || currentEntry.id !== entry.id) {
       return;
     }
 
-    sendLovenseCommandBatch(entry, action, batch, isFirstBatch);
+    sendLovenseCommandBatch(entry, action, batch, isFirstBatch, program);
   };
 
   if (batch.delayMs <= 0) {
@@ -1917,22 +3905,26 @@ function scheduleLovenseCommandBatch(entry, action, batch, isFirstBatch) {
   state.scheduledLovenseTimers.add(timerId);
 }
 
-async function sendLovenseCommandBatch(entry, action, batch, isFirstBatch) {
+async function sendLovenseCommandBatch(entry, action, batch, isFirstBatch, program) {
   const executionMode = normalizeExecutionMode(entry.executionMode);
+  const programMode = program?.mode || (executionMode === "lovense-test" ? "test" : "live");
+  const programLovense = program?.lovense || entry.lovense;
+  const programLabel = program?.label || formatExecutionMode(entry.executionMode);
   state.pendingExecutions += 1;
   renderStatus();
 
-  const selectedToys = getEffectiveLovenseSelectedToys(entry.lovense, executionMode === "lovense-test" ? "test" : "live");
+  const selectedToys = getEffectiveLovenseSelectedToys(programLovense, programMode);
   const detailLines = [
+    `User: ${programLabel}`,
     `Devices: ${formatLovenseSelectedToySummary(
       selectedToys,
-      executionMode === "lovense-test" ? "no simulated device" : "current selection",
+      programMode === "test" ? "no simulated device" : "current selection",
     )}`,
     `Delay: ${batch.delayMs} ms`,
     `Commands: ${batch.commands.map((item) => formatLovenseCommandForLog(item, selectedToys)).join(", ")}`,
   ];
 
-  if (executionMode === "lovense-test") {
+  if (programMode === "test") {
     appendLog({
       ok: true,
       title: `Lovense test ${action.index} at ${formatMs(action.atMs)}`,
@@ -1943,36 +3935,7 @@ async function sendLovenseCommandBatch(entry, action, batch, isFirstBatch) {
     return;
   }
 
-  if (ui.dryRun.checked) {
-    appendLog({
-      ok: true,
-      title: `Lovense dry run ${action.index} at ${formatMs(action.atMs)}`,
-      detail: detailLines.join("\n"),
-    });
-    state.pendingExecutions = Math.max(0, state.pendingExecutions - 1);
-    renderStatus();
-    return;
-  }
-
-  const seenToyIds = new Set();
-  const payloadCommands = batch.commands.flatMap((command) =>
-    (command.toyIds || []).map((toyId) => {
-      const usesLocalAutoStop = command.durationMs > 0 && command.durationMs < 1000;
-      const payloadCommand = {
-        ...command,
-        toyIds: undefined,
-        toy: toyId,
-        delayMs: undefined,
-        durationMs: undefined,
-        timeSec: usesLocalAutoStop ? 0 : Math.max(0, (command.durationMs ?? 0) / 1000),
-        localAutoStopDurationMs: usesLocalAutoStop ? command.durationMs : 0,
-        usesLocalAutoStop,
-        stopPrevious: isFirstBatch && !seenToyIds.has(toyId) ? 1 : 0,
-      };
-      seenToyIds.add(toyId);
-      return payloadCommand;
-    }),
-  );
+  const payloadCommands = buildLovensePayloadCommands(batch, isFirstBatch);
   if (!payloadCommands.length) {
     appendLog({
       ok: false,
@@ -1991,7 +3954,7 @@ async function sendLovenseCommandBatch(entry, action, batch, isFirstBatch) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        config: buildLovenseRequestConfig(entry.lovense),
+        config: buildLovenseRequestConfig(programLovense),
         timeoutSeconds: 5,
         commands: requestCommands,
       }),
@@ -2002,28 +3965,50 @@ async function sendLovenseCommandBatch(entry, action, batch, isFirstBatch) {
     }
 
     const affectedToyIds = [...new Set(payloadCommands.map((command) => command.toy).filter(Boolean))];
-    affectedToyIds.forEach(clearLovenseAutoStopTimer);
+    affectedToyIds.forEach((toyId) => clearLovenseAutoStopTimer(toyId, program?.id || ""));
     payloadCommands.forEach((command) => {
       if (command.usesLocalAutoStop && command.localAutoStopDurationMs > 0) {
-        scheduleLovenseAutoStop(entry, action, command.toy, command.localAutoStopDurationMs);
+        scheduleLovenseAutoStop(entry, action, command.toy, command.localAutoStopDurationMs, program);
       }
     });
 
     appendLog({
       ok: true,
-      title: `Lovense action ${action.index} at ${formatMs(action.atMs)}`,
+      title: `Lovense action ${action.index} for ${programLabel} at ${formatMs(action.atMs)}`,
       detail: detailLines.join("\n"),
     });
   } catch (error) {
     appendLog({
       ok: false,
-      title: `Lovense action ${action.index} failed`,
+      title: `Lovense action ${action.index} for ${programLabel} failed`,
       detail: `${batch.delayMs} ms delay\n${String(error)}`,
     });
   } finally {
     state.pendingExecutions = Math.max(0, state.pendingExecutions - 1);
     renderStatus();
   }
+}
+
+function buildLovensePayloadCommands(batch, isFirstBatch) {
+  const seenToyIds = new Set();
+  return batch.commands.flatMap((command) =>
+    (command.toyIds || []).map((toyId) => {
+      const usesLocalAutoStop = command.durationMs > 0 && command.durationMs < 1000;
+      const payloadCommand = {
+        ...command,
+        toyIds: undefined,
+        toy: toyId,
+        delayMs: undefined,
+        durationMs: undefined,
+        timeSec: usesLocalAutoStop ? 1 : Math.max(0, (command.durationMs ?? 0) / 1000),
+        localAutoStopDurationMs: usesLocalAutoStop ? command.durationMs : 0,
+        usesLocalAutoStop,
+        stopPrevious: isFirstBatch && !seenToyIds.has(toyId) ? 1 : 0,
+      };
+      seenToyIds.add(toyId);
+      return payloadCommand;
+    }),
+  );
 }
 
 function renderActionTable() {
@@ -2067,6 +4052,7 @@ function renderPlaylist() {
             <strong>${escapeHtml(entry.title)}</strong>
             <span>${escapeHtml(entry.funscriptName)} | ${entry.actions.length} actions</span>
             <span>${escapeHtml(formatExecutionMode(entry.executionMode))} | ${escapeHtml(getEntryModeSummary(entry))} | #${index + 1}</span>
+            ${renderPlaylistUserToggles(entry)}
           </div>
           <div class="playlist-item-actions">
             <button class="secondary small" data-action="select" data-entry-id="${entry.id}">Load</button>
@@ -2086,9 +4072,11 @@ function renderStatus() {
 
   ui.playlistCount.textContent = `${state.playlist.length} entries`;
   ui.playlistModeStatus.textContent = formatPlaybackMode(state.playbackMode);
-  ui.armedStatus.textContent = state.armed ? "Enabled" : "Disabled";
+  ui.armedStatus.textContent = state.ruleExecutionPaused ? "Paused" : "Active";
   ui.pendingCount.textContent = String(state.pendingExecutions);
-  ui.armButton.textContent = state.armed ? "Disable execution" : "Enable execution";
+  ui.armButton.textContent = "Rule script active";
+  ui.armButton.disabled = true;
+  ui.armButton.classList.toggle("hidden", true);
   ui.currentTime.textContent = formatMs(ui.video.currentTime * 1000);
   ui.currentEntryTitle.textContent = entry ? entry.title : "No playlist entry loaded";
   ui.currentEntryMeta.textContent = entry
@@ -2099,6 +4087,56 @@ function renderStatus() {
     : "No playlist entry loaded.";
   ui.nextAction.textContent = nextAction ? `${nextAction.index} @ ${formatMs(nextAction.atMs)}` : "-";
   ui.lastAction.textContent = lastAction ? `${lastAction.index} @ ${formatMs(lastAction.atMs)}` : "-";
+  renderPlayerControls(entry);
+  renderLovenseStopControl(entry);
+}
+
+function renderLovenseStopControl(entry = getCurrentEntry()) {
+  const visible = isLovenseLiveEntry(entry);
+  const emergencyPaused = visible && state.ruleExecutionPaused;
+  ui.playerLovenseStopButton.classList.toggle("hidden", !visible);
+  ui.playerLovenseStopButton.textContent = emergencyPaused ? "RESUME" : "STOP";
+  ui.playerLovenseStopButton.title = emergencyPaused ? "Resume video and Lovense rule execution" : "Stop Lovense and pause";
+  ui.playerLovenseStopButton.setAttribute(
+    "aria-label",
+    emergencyPaused ? "Resume video and Lovense rule execution" : "Stop Lovense and pause",
+  );
+  ui.playerLovenseStopButton.classList.toggle("resume", emergencyPaused);
+
+  ui.stopLovenseButton.textContent = emergencyPaused ? "Resume live" : "Stop & pause";
+  ui.stopLovenseButton.title = emergencyPaused ? "Resume video and Lovense rule execution" : "Stop Lovense and pause";
+  ui.stopLovenseButton.classList.toggle("danger", !emergencyPaused);
+}
+
+function renderPlayerControls(entry = getCurrentEntry()) {
+  const hasEntry = Boolean(entry);
+  const hasVideoSource = hasEntry && Boolean(ui.video.currentSrc || ui.video.src);
+  const isPlaying = hasVideoSource && !ui.video.paused && !ui.video.ended;
+  const durationSeconds = Number(ui.video.duration);
+  const hasDuration = Number.isFinite(durationSeconds) && durationSeconds > 0;
+  const currentSeconds = Number.isFinite(Number(ui.video.currentTime)) ? Number(ui.video.currentTime) : 0;
+
+  ui.playerPreviousButton.disabled = !getPreviousEntryId();
+  ui.playerNextButton.disabled = !getNextEntryId();
+  ui.playerRewindButton.disabled = !hasDuration;
+  ui.playerForwardButton.disabled = !hasDuration;
+  ui.playerPlayButton.disabled = !hasEntry || !hasVideoSource;
+  ui.playerPlayIcon.innerHTML = isPlaying ? PLAYER_PAUSE_ICON_HTML : PLAYER_PLAY_ICON_HTML;
+  ui.playerPlayLabel.textContent = isPlaying ? "Pause" : "Play";
+  ui.playerPlayButton.title = isPlaying ? "Pause" : "Play";
+  ui.playerPlayButton.setAttribute("aria-label", isPlaying ? "Pause" : "Play");
+
+  ui.playerCurrentTime.textContent = formatMs(currentSeconds * 1000);
+  ui.playerDuration.textContent = hasDuration ? formatMs(durationSeconds * 1000) : "00:00.000";
+  ui.playerSeek.disabled = !hasDuration;
+  ui.playerSeek.value = hasDuration ? String(Math.round((currentSeconds / durationSeconds) * 1000)) : "0";
+
+  const volumeValue = Math.round((Number.isFinite(Number(ui.video.volume)) ? Number(ui.video.volume) : 1) * 100);
+  ui.playerVolume.value = String(volumeValue);
+  ui.playerMuteButton.textContent = ui.video.muted || volumeValue === 0 ? "Mute" : "Vol";
+  ui.playerMuteButton.title = ui.video.muted || volumeValue === 0 ? "Unmute" : "Mute";
+  ui.playerMuteButton.setAttribute("aria-label", ui.video.muted || volumeValue === 0 ? "Unmute" : "Mute");
+  applyPlayerControlsVisibility();
 }
 
 function appendLog(entry) {
@@ -2116,8 +4154,12 @@ function appendLog(entry) {
 
 function handlePlaylistListClick(event) {
   const entryId = event.target.dataset.entryId ?? event.target.closest("[data-entry-id]")?.dataset.entryId;
-  const action = event.target.dataset.action ?? "select";
+  const action = event.target.dataset.action ?? event.target.closest("[data-action]")?.dataset.action ?? "select";
   if (!entryId) {
+    return;
+  }
+
+  if (action === "toggle-user") {
     return;
   }
 
@@ -2130,19 +4172,44 @@ function handlePlaylistListClick(event) {
   loadEntry(entryId);
 }
 
+function handlePlaylistUserToggleChange(event) {
+  const input = event.target.closest("[data-playlist-user-id]");
+  if (!input) {
+    return;
+  }
+
+  const entry = state.playlist.find((item) => item.id === input.dataset.entryId);
+  if (!entry) {
+    return;
+  }
+
+  const normalizedLovense = normalizeLovenseConfig(entry.lovense);
+  const activeIds = new Set(normalizedLovense.activeConnectionIds || []);
+  if (input.checked) {
+    activeIds.add(input.dataset.playlistUserId);
+  } else {
+    activeIds.delete(input.dataset.playlistUserId);
+  }
+
+  entry.lovense = normalizeLovenseConfig({
+    ...normalizedLovense,
+    activeConnectionIds: [...activeIds],
+  });
+
+  if (entry.id === state.currentEntryId) {
+    applyLovenseConfigToForm(entry.lovense);
+    renderExecutionModeForm();
+    renderLovenseRuleStatus();
+  }
+
+  renderPlaylist();
+  renderStatus();
+}
+
 async function parseFunscriptFile(file, sourceDocument = null) {
   const text = await file.text();
   const parsed = JSON.parse(text);
-  const actions = (Array.isArray(parsed.actions) ? parsed.actions : [])
-    .map((action, index) => ({ index, atMs: Number(action.at), pos: Number(action.pos) }))
-    .filter((action) => Number.isFinite(action.atMs) && Number.isFinite(action.pos))
-    .sort((left, right) => left.atMs - right.atMs)
-    .map((action, index, all) => ({
-      ...action,
-      index,
-      previousAtMs: index > 0 ? all[index - 1].atMs : null,
-      nextAtMs: index < all.length - 1 ? all[index + 1].atMs : null,
-    }));
+  const actions = extractFunscriptActions(parsed);
 
   return {
     file,
@@ -2152,6 +4219,19 @@ async function parseFunscriptFile(file, sourceDocument = null) {
     settings: extractScriptSettings(parsed),
     sourceDocument: sourceDocument ? normalizeSelectedDocument(sourceDocument) : null,
   };
+}
+
+function extractFunscriptActions(parsed) {
+  return (Array.isArray(parsed?.actions) ? parsed.actions : [])
+    .map((action, index) => ({ index, atMs: Number(action.at), pos: Number(action.pos) }))
+    .filter((action) => Number.isFinite(action.atMs) && Number.isFinite(action.pos))
+    .sort((left, right) => left.atMs - right.atMs)
+    .map((action, index, all) => ({
+      ...action,
+      index,
+      previousAtMs: index > 0 ? all[index - 1].atMs : null,
+      nextAtMs: index < all.length - 1 ? all[index + 1].atMs : null,
+    }));
 }
 
 function validateSelectedFunscriptFiles(files) {
@@ -2216,18 +4296,62 @@ function pairVideosWithScripts(videoFiles, parsedScripts) {
   };
 }
 
-function createPlaylistEntry(videoFile, scriptData) {
+function createPlaylistEntry(videoFile, scriptData, videoSourceDocument = null) {
   const settings = resolveInitialEntrySettings(scriptData.settings);
   return {
     id: `entry-${state.playlistCounter += 1}`,
     title: stripExtension(videoFile.name),
+    videoName: videoFile.name,
     videoUrl: URL.createObjectURL(videoFile),
+    videoFile,
+    videoSource: normalizeMediaSource(
+      {
+        ...(videoSourceDocument || {}),
+        kind: "videos",
+        name: videoFile.name,
+        source: videoSourceDocument?.uri ? "android-document" : "selected-file",
+      },
+      "videos",
+      videoFile.name,
+    ),
+    funscriptName: scriptData.file.name,
+    funscriptFile: scriptData.file,
+    actions: scriptData.actions,
+    range: scriptData.parsed.range ?? "-",
+    inverted: Boolean(scriptData.parsed.inverted),
+    scriptDocument: scriptData.parsed,
+    funscriptSource: normalizeMediaSource(
+      {
+        ...(scriptData.sourceDocument || {}),
+        kind: "funscripts",
+        name: scriptData.file.name,
+        source: scriptData.sourceDocument?.token ? "android-document" : "selected-file",
+      },
+      "funscripts",
+      scriptData.file.name,
+    ),
+    executionMode: settings.executionMode,
+    rulesText: settings.rulesText,
+    lovense: settings.lovense,
+  };
+}
+
+function createPlaylistEntryFromLibrary(videoSelection, scriptData) {
+  const settings = resolveInitialEntrySettings(scriptData.settings);
+  const videoSource = normalizeMediaSource(videoSelection, "videos", videoSelection.name);
+  const funscriptSource = normalizeMediaSource(scriptData.source, "funscripts", scriptData.file.name);
+  return {
+    id: `entry-${state.playlistCounter += 1}`,
+    title: stripExtension(videoSelection.name),
+    videoName: videoSelection.name,
+    videoUrl: buildLibraryFileUrl("videos", videoSelection.libraryName || videoSelection.name),
+    videoSource,
     funscriptName: scriptData.file.name,
     actions: scriptData.actions,
     range: scriptData.parsed.range ?? "-",
     inverted: Boolean(scriptData.parsed.inverted),
     scriptDocument: scriptData.parsed,
-    funscriptSource: scriptData.sourceDocument,
+    funscriptSource,
     executionMode: settings.executionMode,
     rulesText: settings.rulesText,
     lovense: settings.lovense,
@@ -2238,14 +4362,121 @@ function resolveInitialEntrySettings(scriptSettings) {
   const formExecutionMode = ui.executionMode.value;
   const formRulesText = normalizeRulesText(ui.lovenseRules.value);
   const formLovense = normalizeLovenseConfig(getLovenseConfigFromForm());
+  const scriptLovense = normalizeEntryLovenseConfig(scriptSettings.lovense, scriptSettings.rulesText);
+  const useFormLovense = isLovenseConfigCustomized(formLovense);
+  const lovense = useFormLovense ? normalizeEntryLovenseConfig(formLovense, formRulesText, formLovense) : scriptLovense;
+  syncPlaylistLovenseFromConfig(lovense);
   return {
     executionMode:
       formExecutionMode !== DEFAULT_EXECUTION_MODE
         ? formExecutionMode
         : normalizeExecutionMode(scriptSettings.executionMode) || DEFAULT_EXECUTION_MODE,
     rulesText: formRulesText !== DEFAULT_RULES_TEXT ? formRulesText : scriptSettings.rulesText || DEFAULT_RULES_TEXT,
-    lovense: isLovenseConfigCustomized(formLovense) ? formLovense : normalizeLovenseConfig(scriptSettings.lovense),
+    lovense,
   };
+}
+
+function normalizeEntryLovenseConfig(config, fallbackRulesText = DEFAULT_RULES_TEXT, playlistLovense = null) {
+  const entryConfig = config || {};
+  const baseLovense = playlistLovense ? normalizeLovenseConfig(playlistLovense) : normalizeLovenseConfig(entryConfig);
+  const rulesText = normalizeRulesText(fallbackRulesText);
+  const rulesByConnectionId = buildConnectionRulesMap(entryConfig, rulesText);
+  const hasExplicitSelectedConnection = Boolean(String(entryConfig.selectedConnectionId || "").trim());
+  const explicitSelectedConnectionId = hasExplicitSelectedConnection ? String(entryConfig.selectedConnectionId).trim() : "";
+  const selectedConnectionId = baseLovense.connections.some((connection) => connection.id === explicitSelectedConnectionId)
+    ? explicitSelectedConnectionId
+    : baseLovense.selectedConnectionId;
+  const activeConnectionIds = Array.isArray(entryConfig.activeConnectionIds)
+    ? entryConfig.activeConnectionIds
+    : baseLovense.activeConnectionIds;
+  return normalizeLovenseConfig({
+    ...baseLovense,
+    selectedConnectionId,
+    activeConnectionIds,
+    connections: baseLovense.connections.map((connection) => ({
+      ...connection,
+      rulesText: rulesByConnectionId.get(connection.id) || resolveConnectionRulesText(connection, rulesText),
+    })),
+  });
+}
+
+function buildPlaylistLovenseConfigWithoutRules(config) {
+  const normalizedLovense = normalizeLovenseConfig(config);
+  return normalizeLovenseConfig({
+    ...normalizedLovense,
+    connections: normalizedLovense.connections.map((connection) => ({
+      ...connection,
+      rulesText: DEFAULT_RULES_TEXT,
+    })),
+  });
+}
+
+function syncPlaylistLovenseFromConfig(config) {
+  state.playlistLovense = buildPlaylistLovenseConfigWithoutRules(config || state.playlistLovense);
+}
+
+function syncPlaylistLovenseFromForm() {
+  writeCurrentRulesTextToSelectedConnection();
+  syncPlaylistLovenseFromConfig(state.formLovense);
+}
+
+function syncPlaylistLovenseUsersToEntries() {
+  const playlistLovense = buildPlaylistLovenseConfigWithoutRules(state.playlistLovense);
+  state.playlist.forEach((entry) => {
+    entry.lovense = normalizeEntryLovenseConfig(entry.lovense, entry.rulesText, playlistLovense);
+  });
+}
+
+function inferPlaylistLovenseFromEntries(entries) {
+  const connectionsById = new Map();
+  let selectedConnectionId = "";
+  (entries || []).forEach((entry) => {
+    const normalizedLovense = normalizeLovenseConfig(entry?.lovense);
+    if (!selectedConnectionId && normalizedLovense.selectedConnectionId) {
+      selectedConnectionId = normalizedLovense.selectedConnectionId;
+    }
+    normalizedLovense.connections.forEach((connection) => {
+      if (!connectionsById.has(connection.id)) {
+        connectionsById.set(connection.id, {
+          ...connection,
+          rulesText: DEFAULT_RULES_TEXT,
+        });
+      }
+    });
+  });
+
+  const connections = [...connectionsById.values()];
+  return buildPlaylistLovenseConfigWithoutRules({
+    ...(connections.length ? {} : DEFAULT_LOVENSE_CONFIG),
+    selectedConnectionId: selectedConnectionId || connections[0]?.id || DEFAULT_LOVENSE_CONNECTION.id,
+    activeConnectionIds: connections.length ? [selectedConnectionId || connections[0]?.id].filter(Boolean) : DEFAULT_LOVENSE_CONFIG.activeConnectionIds,
+    connections: connections.length ? connections : DEFAULT_LOVENSE_CONFIG.connections,
+  });
+}
+
+function buildConnectionRulesMap(config, fallbackRulesText = DEFAULT_RULES_TEXT) {
+  const rulesText = normalizeRulesText(fallbackRulesText);
+  const rulesByConnectionId = new Map();
+  const connectionRules = Array.isArray(config?.connectionRules) ? config.connectionRules : [];
+  connectionRules.forEach((item) => {
+    const connectionId = String(item?.connectionId || item?.id || "").trim();
+    if (connectionId) {
+      rulesByConnectionId.set(connectionId, normalizeRulesText(item.rulesText));
+    }
+  });
+  (Array.isArray(config?.connections) ? config.connections : []).forEach((connection) => {
+    const connectionId = String(connection?.id || "").trim();
+    if (!connectionId || rulesByConnectionId.has(connectionId)) {
+      return;
+    }
+    const connectionRulesText = normalizeRulesText(connection.rulesText);
+    if (connectionRulesText !== DEFAULT_RULES_TEXT || rulesText === DEFAULT_RULES_TEXT) {
+      rulesByConnectionId.set(connectionId, connectionRulesText);
+    } else {
+      rulesByConnectionId.set(connectionId, rulesText);
+    }
+  });
+  return rulesByConnectionId;
 }
 
 function hasPersistedScriptSettings(scriptSettings) {
@@ -2259,7 +4490,8 @@ function hasPersistedScriptSettings(scriptSettings) {
 function applyScriptSettingsToForm(scriptSettings) {
   ui.executionMode.value = normalizeExecutionMode(scriptSettings.executionMode) || DEFAULT_EXECUTION_MODE;
   ui.lovenseRules.value = scriptSettings.rulesText || DEFAULT_RULES_TEXT;
-  applyLovenseConfigToForm(scriptSettings.lovense, { resetDetectedToys: true });
+  applyLovenseConfigToForm(normalizeEntryLovenseConfig(scriptSettings.lovense, scriptSettings.rulesText), { resetDetectedToys: true });
+  syncLovenseRuleTextareaFromSelectedConnection();
   renderExecutionModeForm();
   renderLovenseToySelect(
     getCurrentSelectedToyIds(),
@@ -2289,32 +4521,49 @@ function extractScriptSettings(parsed) {
 }
 
 function applyCurrentFormToEntry(entry) {
+  writeCurrentRulesTextToSelectedConnection();
+  const formLovense = normalizeLovenseConfig(getLovenseConfigFromForm());
   entry.executionMode = ui.executionMode.value;
   entry.rulesText = normalizeRulesText(ui.lovenseRules.value);
-  entry.lovense = normalizeLovenseConfig(getLovenseConfigFromForm());
+  entry.lovense = normalizeEntryLovenseConfig(formLovense, entry.rulesText, formLovense);
+  syncPlaylistLovenseFromConfig(formLovense);
+  syncPlaylistLovenseUsersToEntries();
+}
+
+function syncCurrentEntryFromLovenseForm(options = {}) {
+  const { render = true } = options;
+  const entry = getCurrentEntry();
+  if (!entry) {
+    syncPlaylistLovenseFromForm();
+    syncPlaylistLovenseUsersToEntries();
+    return false;
+  }
+
+  applyCurrentFormToEntry(entry);
+  if (render) {
+    renderPlaylist();
+    renderStatus();
+  }
+  return true;
+}
+
+function handleLovenseRulesInput() {
+  syncCurrentEntryFromLovenseForm({ render: false });
+  renderLovenseRuleStatus();
+  renderPlaylist();
+  renderStatus();
 }
 
 function buildSavedFunscriptDocument(entry) {
   const documentCopy = cloneJson(entry.scriptDocument ?? {});
-  const metadata = documentCopy.metadata && typeof documentCopy.metadata === "object" ? documentCopy.metadata : {};
-  const normalizedLovense = normalizeLovenseConfig(entry.lovense);
-
-  metadata.fhplayer = {
-    schemaVersion: 2,
-    executionMode: entry.executionMode,
-    rulesText: entry.rulesText,
-    lovense: {
-      selectedConnectionId: normalizedLovense.selectedConnectionId,
-      connections: normalizedLovense.connections,
-      testSelectedToys: normalizedLovense.testSelectedToys,
-      testToyId: normalizedLovense.testToyId,
-      testToyName: normalizedLovense.testToyName,
-      testToyType: normalizedLovense.testToyType,
-      testCapabilities: normalizedLovense.testCapabilities,
-    },
-  };
-
-  documentCopy.metadata = metadata;
+  if (documentCopy.metadata && typeof documentCopy.metadata === "object") {
+    delete documentCopy.metadata.fhplayer;
+    delete documentCopy.metadata.fh_player;
+  }
+  delete documentCopy.fhplayer;
+  delete documentCopy.lovense;
+  delete documentCopy.executionMode;
+  delete documentCopy.rulesText;
   return documentCopy;
 }
 
@@ -2350,6 +4599,21 @@ function normalizeLovenseConnection(connection, index = 1) {
     .filter((toy) => toy.id);
   const primaryToy = selectedToys[0] || null;
   const capabilities = getSharedCapabilitiesForToys(selectedToys);
+  const legacyTestToy =
+    merged.testToyId || merged.testToyName || merged.testToyType || merged.testCapabilities
+      ? [
+          normalizeToySelection({
+            toyId: merged.testToyId,
+            toyName: merged.testToyName,
+            toyType: merged.testToyType,
+            capabilities: merged.testCapabilities,
+          }),
+        ].filter((toy) => toy.id)
+      : [];
+  const testSelectedToys = (Array.isArray(merged.testSelectedToys) ? merged.testSelectedToys : legacyTestToy)
+    .map((toy) => normalizeToySelection(toy))
+    .filter((toy) => toy.id);
+  const primaryTestToy = testSelectedToys[0] || null;
   return {
     id: String(merged.id || `user-${index}`).trim() || `user-${index}`,
     label: String(merged.label || `User ${index}`).trim() || `User ${index}`,
@@ -2358,10 +4622,16 @@ function normalizeLovenseConnection(connection, index = 1) {
     port: String(merged.port || "").trim(),
     platformName: String(merged.platformName || DEFAULT_LOVENSE_CONNECTION.platformName).trim() || DEFAULT_LOVENSE_CONNECTION.platformName,
     selectedToys,
+    rulesText: normalizeRulesText(merged.rulesText ?? merged.ruleScript ?? DEFAULT_RULES_TEXT),
     toyId: primaryToy?.id || "",
     toyName: primaryToy?.nickName || primaryToy?.name || "",
     toyType: primaryToy?.type || "",
     capabilities,
+    testSelectedToys,
+    testToyId: primaryTestToy?.id || "",
+    testToyName: primaryTestToy?.nickName || primaryTestToy?.name || "",
+    testToyType: primaryTestToy?.type || "",
+    testCapabilities: getSharedCapabilitiesForToys(testSelectedToys),
   };
 }
 
@@ -2419,6 +4689,18 @@ function normalizeLovenseConfig(config) {
       ? String(merged.selectedConnectionId).trim()
       : connections[0]?.id || DEFAULT_LOVENSE_CONNECTION.id;
   const selectedConnection = connections.find((connection) => connection.id === selectedConnectionId) || connections[0];
+  const requestedActiveConnectionIds = Array.isArray(config?.activeConnectionIds)
+    ? config.activeConnectionIds.map((connectionId) => String(connectionId || "").trim()).filter(Boolean)
+    : [];
+  const connectionIds = new Set(connections.map((connection) => connection.id));
+  const activeConnectionIds = requestedActiveConnectionIds.filter((connectionId) => connectionIds.has(connectionId));
+  const normalizedActiveConnectionIds = activeConnectionIds.length
+    ? [...new Set(activeConnectionIds)]
+    : selectedConnectionId
+      ? [selectedConnectionId]
+      : connections[0]?.id
+        ? [connections[0].id]
+        : [];
 
   const legacyTestToy =
     merged.testToyId || merged.testToyName || merged.testToyType || merged.testCapabilities
@@ -2431,7 +4713,7 @@ function normalizeLovenseConfig(config) {
             }),
         ].filter((toy) => toy.id)
       : [];
-  const testSelectedToys = (
+  const topLevelTestSelectedToys = (
     explicitTestSelectedToys && explicitTestSelectedToys.length
       ? explicitTestSelectedToys
       : hasLegacyTestConfig
@@ -2440,14 +4722,18 @@ function normalizeLovenseConfig(config) {
   )
     .map((toy) => normalizeToySelection(toy))
     .filter((toy) => toy.id);
-  const normalizedTestSelectedToys = testSelectedToys.length
-    ? testSelectedToys
-    : DEFAULT_LOVENSE_CONFIG.testSelectedToys.map((toy) => normalizeToySelection(toy));
+  const selectedConnectionTestToys = (selectedConnection?.testSelectedToys || []).map((toy) => normalizeToySelection(toy)).filter((toy) => toy.id);
+  const normalizedTestSelectedToys = selectedConnectionTestToys.length
+    ? selectedConnectionTestToys
+    : topLevelTestSelectedToys.length
+      ? topLevelTestSelectedToys
+      : DEFAULT_LOVENSE_CONFIG.testSelectedToys.map((toy) => normalizeToySelection(toy));
   const primaryTestToy = normalizedTestSelectedToys[0] || null;
   const sharedTestCapabilities = getSharedCapabilitiesForToys(normalizedTestSelectedToys);
 
   return {
     selectedConnectionId,
+    activeConnectionIds: normalizedActiveConnectionIds,
     connections,
     scheme: selectedConnection?.scheme || DEFAULT_LOVENSE_CONNECTION.scheme,
     host: selectedConnection?.host || "",
@@ -2486,12 +4772,21 @@ function getSelectedConnection(lovenseConfig) {
   return normalized.connections.find((connection) => connection.id === normalized.selectedConnectionId) || normalized.connections[0] || null;
 }
 
+function getActiveLiveConnections(lovenseConfig) {
+  const normalized = normalizeLovenseConfig(lovenseConfig);
+  const activeIds = new Set(normalized.activeConnectionIds || []);
+  return normalized.connections.filter((connection) => activeIds.has(connection.id));
+}
+
 function getEffectiveLovenseSelectedToys(lovense, mode = "live") {
   const normalizedLovense = normalizeLovenseConfig(lovense);
+  const selectedConnection = getSelectedConnection(normalizedLovense);
   const toys =
     mode === "test"
-      ? normalizedLovense.testSelectedToys || []
-      : getSelectedConnection(normalizedLovense)?.selectedToys || [];
+      ? (selectedConnection?.testSelectedToys || []).length
+        ? selectedConnection.testSelectedToys
+        : normalizedLovense.testSelectedToys || []
+      : selectedConnection?.selectedToys || [];
   return toys.map((toy) => normalizeToySelection(toy)).filter((toy) => toy.id);
 }
 
@@ -2500,6 +4795,7 @@ function renderLovenseConnectionSelect() {
     .map((connection) => `<option value="${escapeHtml(connection.id)}">${escapeHtml(connection.label)}</option>`)
     .join("");
   ui.lovenseConnectionSelect.value = state.formLovense.selectedConnectionId || state.formLovense.connections[0]?.id || "";
+  renderLovenseActiveConnectionControls();
 }
 
 function syncLovenseConnectionFields() {
@@ -2509,6 +4805,76 @@ function syncLovenseConnectionFields() {
   ui.lovenseHost.value = selectedConnection?.host || "";
   ui.lovensePort.value = selectedConnection?.port || "";
   ui.lovensePlatformName.value = selectedConnection?.platformName || DEFAULT_LOVENSE_CONNECTION.platformName;
+}
+
+function renderLovenseActiveConnectionControls() {
+  const normalizedLovense = normalizeLovenseConfig(state.formLovense);
+  const activeIds = new Set(normalizedLovense.activeConnectionIds || []);
+  ui.lovenseActiveConnections.innerHTML = normalizedLovense.connections
+    .map(
+      (connection) => `
+        <label class="lovense-active-user">
+          <input type="checkbox" value="${escapeHtml(connection.id)}"${activeIds.has(connection.id) ? " checked" : ""} />
+          <span>${escapeHtml(connection.label)}</span>
+        </label>
+      `,
+    )
+    .join("");
+}
+
+function renderPlaylistUserToggles(entry) {
+  const executionMode = normalizeExecutionMode(entry.executionMode);
+  if (executionMode !== "lovense-live" && executionMode !== "lovense-test") {
+    return "";
+  }
+
+  const normalizedLovense = normalizeLovenseConfig(entry.lovense);
+  const activeIds = new Set(normalizedLovense.activeConnectionIds || []);
+  return `
+    <div class="playlist-user-toggles" data-action="toggle-user" data-entry-id="${entry.id}">
+      ${normalizedLovense.connections
+        .map(
+          (connection) => `
+            <label data-action="toggle-user" data-entry-id="${entry.id}">
+              <input
+                type="checkbox"
+                data-action="toggle-user"
+                data-entry-id="${entry.id}"
+                data-playlist-user-id="${escapeHtml(connection.id)}"
+                ${activeIds.has(connection.id) ? "checked" : ""}
+              />
+              <span>${escapeHtml(connection.label || "User")}</span>
+            </label>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function writeCurrentRulesTextToSelectedConnection() {
+  const selectedConnection = getSelectedConnection(state.formLovense);
+  if (!selectedConnection) {
+    return;
+  }
+
+  const rulesText = normalizeRulesText(ui.lovenseRules.value);
+  state.formLovense = normalizeLovenseConfig({
+    ...state.formLovense,
+    connections: state.formLovense.connections.map((connection) =>
+      connection.id === selectedConnection.id
+        ? {
+            ...connection,
+            rulesText,
+          }
+        : connection,
+    ),
+  });
+}
+
+function syncLovenseRuleTextareaFromSelectedConnection() {
+  const selectedConnection = getSelectedConnection(state.formLovense);
+  ui.lovenseRules.value = selectedConnection?.rulesText || DEFAULT_RULES_TEXT;
 }
 
 function getCurrentAvailableToys() {
@@ -2522,7 +4888,7 @@ function getCurrentAvailableToys() {
 
 function getCurrentSelectedToyIds() {
   if (ui.executionMode.value === "lovense-test") {
-    return (state.formLovense.testSelectedToys || []).map((toy) => toy.id).filter(Boolean);
+    return getEffectiveLovenseSelectedToys(state.formLovense, "test").map((toy) => toy.id).filter(Boolean);
   }
 
   return (getSelectedConnection(state.formLovense)?.selectedToys || []).map((toy) => toy.id).filter(Boolean);
@@ -2531,7 +4897,7 @@ function getCurrentSelectedToyIds() {
 function getCurrentToyFallbacks(fallbackLovense = null) {
   const normalizedFallback = fallbackLovense ? normalizeLovenseConfig(fallbackLovense) : null;
   if (ui.executionMode.value === "lovense-test") {
-    return normalizedFallback ? normalizedFallback.testSelectedToys || [] : [];
+    return normalizedFallback ? getEffectiveLovenseSelectedToys(normalizedFallback, "test") : [];
   }
 
   const fallbackConnection = normalizedFallback ? getSelectedConnection(normalizedFallback) : null;
@@ -2567,9 +4933,19 @@ function getSelectedToysForCurrentMode(fallbackLovense = null) {
 function assignSelectedToysToForm(toys) {
   const normalizedToys = (toys || []).map((toy) => normalizeToySelection(toy)).filter((toy) => toy.id);
   if (ui.executionMode.value === "lovense-test") {
+    const selectedConnection = getSelectedConnection(state.formLovense);
+    const selectedTestToys = normalizedToys.length ? normalizedToys : [normalizeToySelection(SIMULATED_TOYS[0])];
     state.formLovense = normalizeLovenseConfig({
       ...state.formLovense,
-      testSelectedToys: normalizedToys.length ? normalizedToys : [normalizeToySelection(SIMULATED_TOYS[0])],
+      testSelectedToys: selectedTestToys,
+      connections: state.formLovense.connections.map((connection) =>
+        connection.id === selectedConnection?.id
+          ? {
+              ...connection,
+              testSelectedToys: selectedTestToys,
+            }
+          : connection,
+      ),
     });
     return;
   }
@@ -2899,9 +5275,19 @@ function renderLovenseActionRanges(lovenseConfig = null, options = {}) {
 
 function buildOfflineLovenseTestConfig() {
   const simulatedToys = getSelectedToysForCurrentMode();
+  const selectedConnection = getSelectedConnection(state.formLovense);
+  const selectedTestToys = simulatedToys.length ? simulatedToys : DEFAULT_LOVENSE_CONFIG.testSelectedToys;
   return normalizeLovenseConfig({
     ...state.formLovense,
-    testSelectedToys: simulatedToys.length ? simulatedToys : DEFAULT_LOVENSE_CONFIG.testSelectedToys,
+    testSelectedToys: selectedTestToys,
+    connections: state.formLovense.connections.map((connection) =>
+      connection.id === selectedConnection?.id
+        ? {
+            ...connection,
+            testSelectedToys: selectedTestToys,
+          }
+        : connection,
+    ),
   });
 }
 
@@ -2912,16 +5298,29 @@ function resolveLovenseRuleConfig(entry = null, { allowOfflineTest = false, requ
   if (ui.executionMode.value === "lovense-test") {
     const offlineConfig = allowOfflineTest ? buildOfflineLovenseTestConfig() : selectedConfig;
     const selectedToys = getSelectedToysForCurrentMode(normalizedEntryLovense);
+    const selectedConnection = getSelectedConnection(offlineConfig);
+    const selectedTestToys =
+      selectedToys.length ||
+      (selectedConnection?.testSelectedToys || []).length ||
+      normalizedEntryLovense?.testSelectedToys?.length ||
+      offlineConfig.testSelectedToys?.length
+        ? selectedToys.length
+          ? selectedToys
+          : selectedConnection?.testSelectedToys?.length
+            ? selectedConnection.testSelectedToys
+            : normalizedEntryLovense?.testSelectedToys || offlineConfig.testSelectedToys
+        : DEFAULT_LOVENSE_CONFIG.testSelectedToys;
     return normalizeLovenseConfig({
       ...offlineConfig,
-      testSelectedToys:
-        selectedToys.length ||
-        normalizedEntryLovense?.testSelectedToys?.length ||
-        offlineConfig.testSelectedToys?.length
-          ? selectedToys.length
-            ? selectedToys
-            : normalizedEntryLovense?.testSelectedToys || offlineConfig.testSelectedToys
-          : DEFAULT_LOVENSE_CONFIG.testSelectedToys,
+      testSelectedToys: selectedTestToys,
+      connections: offlineConfig.connections.map((connection) =>
+        connection.id === selectedConnection?.id
+          ? {
+              ...connection,
+              testSelectedToys: selectedTestToys,
+            }
+          : connection,
+      ),
     });
   }
 
@@ -2950,10 +5349,20 @@ function validateCurrentFormForPersistence(entry = null) {
   }
 
   const isTestMode = ui.executionMode.value === "lovense-test";
-  const lovenseConfig = resolveLovenseRuleConfig(entry, { allowOfflineTest: isTestMode, requireToyId: !isTestMode });
-  validateLovenseRulesForConfig(ui.lovenseRules.value, lovenseConfig, {
-    requireToyId: !isTestMode,
-    mode: isTestMode ? "test" : "live",
+  writeCurrentRulesTextToSelectedConnection();
+  const activePrograms = getActiveLovenseRulePrograms({
+    executionMode: isTestMode ? "lovense-test" : "lovense-live",
+    lovense: state.formLovense,
+    rulesText: ui.lovenseRules.value,
+  });
+  if (!activePrograms.length) {
+    throw new Error("Select at least one Lovense user for this playlist entry.");
+  }
+  activePrograms.forEach((program) => {
+    validateLovenseRulesForConfig(program.rulesText, program.lovense, {
+      requireToyId: !isTestMode,
+      mode: isTestMode ? "test" : "live",
+    });
   });
 }
 
@@ -2975,11 +5384,13 @@ function isLovenseConfigCustomized(config) {
         connection.host !== defaultConnection.host ||
         connection.port !== defaultConnection.port ||
         connection.platformName !== defaultConnection.platformName ||
+        connection.rulesText !== DEFAULT_RULES_TEXT ||
         connection.selectedToys.map((toy) => toy.id).join(",") !== defaultConnection.selectedToys.map((toy) => toy.id).join(",") ||
         connection.capabilities.length > 0
       );
     }) ||
     normalized.connections.length > 1 ||
+    normalized.activeConnectionIds.join(",") !== DEFAULT_LOVENSE_CONFIG.activeConnectionIds.join(",") ||
     normalized.testSelectedToys.map((toy) => toy.id).join(",") !== DEFAULT_LOVENSE_CONFIG.testSelectedToys.map((toy) => toy.id).join(",")
   );
 }
@@ -3123,24 +5534,32 @@ function clearScheduledLovenseActions() {
   state.lovenseAutoStopTimers.clear();
 }
 
-function clearLovenseAutoStopTimer(toyId) {
-  if (!toyId || !state.lovenseAutoStopTimers.has(toyId)) {
-    return;
-  }
-  clearTimeout(state.lovenseAutoStopTimers.get(toyId));
-  state.lovenseAutoStopTimers.delete(toyId);
+function buildLovenseAutoStopKey(toyId, programId = "") {
+  return `${programId || "default"}:${toyId || ""}`;
 }
 
-function scheduleLovenseAutoStop(entry, action, toyId, durationMs) {
+function clearLovenseAutoStopTimer(toyId, programId = "") {
+  const timerKey = buildLovenseAutoStopKey(toyId, programId);
+  if (!toyId || !state.lovenseAutoStopTimers.has(timerKey)) {
+    return;
+  }
+  clearTimeout(state.lovenseAutoStopTimers.get(timerKey));
+  state.lovenseAutoStopTimers.delete(timerKey);
+}
+
+function scheduleLovenseAutoStop(entry, action, toyId, durationMs, program = null) {
   if (!toyId || !(durationMs > 0)) {
     return;
   }
 
-  clearLovenseAutoStopTimer(toyId);
+  const programId = program?.id || "";
+  const timerKey = buildLovenseAutoStopKey(toyId, programId);
+  const programLovense = program?.lovense || entry.lovense;
+  clearLovenseAutoStopTimer(toyId, programId);
   const timerId = window.setTimeout(async () => {
-    state.lovenseAutoStopTimers.delete(toyId);
+    state.lovenseAutoStopTimers.delete(timerKey);
     const currentEntry = getCurrentEntry();
-    if (!state.armed || !currentEntry || currentEntry.id !== entry.id) {
+    if (!isRuleExecutionActive() || !currentEntry || currentEntry.id !== entry.id) {
       return;
     }
 
@@ -3149,7 +5568,7 @@ function scheduleLovenseAutoStop(entry, action, toyId, durationMs) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          config: buildLovenseRequestConfig(entry.lovense),
+          config: buildLovenseRequestConfig(programLovense),
           timeoutSeconds: 5,
           commands: [
             {
@@ -3167,60 +5586,98 @@ function scheduleLovenseAutoStop(entry, action, toyId, durationMs) {
       appendLog({
         ok: false,
         title: `Lovense auto-stop failed for action ${action.index}`,
-        detail: `${toyId} after ${durationMs} ms\n${String(error)}`,
+        detail: `${program?.label || "User"} | ${toyId} after ${durationMs} ms\n${String(error)}`,
       });
     }
   }, durationMs);
-  state.lovenseAutoStopTimers.set(toyId, timerId);
+  state.lovenseAutoStopTimers.set(timerKey, timerId);
 }
 
 async function sendLovenseStopForCurrentEntry(logDetail, options = {}) {
-  const { force = false } = options;
+  const { logSkipped = false } = options;
   const entry = getCurrentEntry();
-  if (!entry || normalizeExecutionMode(entry.executionMode) !== "lovense-live" || (!state.armed && !force)) {
-    return;
-  }
-  if (!entry.lovense?.host || !entry.lovense?.port) {
-    return;
-  }
-
-  const selectedToys = getEffectiveLovenseSelectedToys(entry.lovense, "live");
-  if (!selectedToys.length) {
-    return;
-  }
-
-  try {
-    await fetch("/api/lovense/command", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        config: buildLovenseRequestConfig(entry.lovense),
-        timeoutSeconds: 5,
-        commands: selectedToys.map((toy, index) => ({
-          command: "Function",
-          action: "Stop",
-          timeSec: 0,
-          toy: toy.id,
-          apiVer: 1,
-          stopPrevious: index === 0 ? 1 : 0,
-        })),
-      }),
-    });
-
-    if (logDetail) {
+  if (!entry || normalizeExecutionMode(entry.executionMode) !== "lovense-live") {
+    if (logSkipped) {
       appendLog({
-        ok: true,
-        title: "Lovense stop sent",
-        detail: logDetail,
+        ok: false,
+        title: "Lovense stop skipped",
+        detail: "No Lovense live playlist entry is currently loaded.",
       });
     }
-  } catch (error) {
+    return false;
+  }
+
+  const programs = getActiveLovenseRulePrograms(entry).filter((program) => program.mode === "live");
+  if (!programs.length) {
+    if (logSkipped) {
+      appendLog({
+        ok: false,
+        title: "Lovense stop skipped",
+        detail: "No Lovense users are active for the current playlist entry.",
+      });
+    }
+    return false;
+  }
+
+  const results = [];
+  for (const program of programs) {
+    const normalized = normalizeLovenseConfig(program.lovense);
+    const selectedToys = getEffectiveLovenseSelectedToys(normalized, "live");
+    if (!normalized.host || !normalized.port) {
+      results.push({ ok: false, label: program.label, detail: "No host or port configured." });
+      continue;
+    }
+    if (!selectedToys.length) {
+      results.push({ ok: false, label: program.label, detail: "No selected Lovense devices." });
+      continue;
+    }
+
+    try {
+      await fetch("/api/lovense/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          config: buildLovenseRequestConfig(normalized),
+          timeoutSeconds: 5,
+          commands: selectedToys.map((toy, index) => ({
+            command: "Function",
+            action: "Stop",
+            timeSec: 0,
+            toy: toy.id,
+            apiVer: 1,
+            stopPrevious: index === 0 ? 1 : 0,
+          })),
+        }),
+      });
+      results.push({
+        ok: true,
+        label: program.label,
+        detail: formatLovenseSelectedToySummary(selectedToys, "no device"),
+      });
+    } catch (error) {
+      results.push({ ok: false, label: program.label, detail: String(error) });
+    }
+  }
+
+  const successfulResults = results.filter((result) => result.ok);
+  if (successfulResults.length && logDetail) {
     appendLog({
-      ok: false,
-      title: "Lovense stop failed",
-      detail: String(error),
+      ok: true,
+      title: "Lovense stop sent",
+      detail: `${logDetail}\n${results.map((result) => `${result.label}: ${result.detail}`).join("\n")}`,
     });
   }
+
+  const failedResults = results.filter((result) => !result.ok);
+  if (failedResults.length && (logSkipped || !successfulResults.length)) {
+    appendLog({
+      ok: false,
+      title: successfulResults.length ? "Lovense stop partially skipped" : "Lovense stop skipped",
+      detail: failedResults.map((result) => `${result.label}: ${result.detail}`).join("\n"),
+    });
+  }
+
+  return successfulResults.length > 0;
 }
 
 function getEffectiveLovenseDeviceConfig(lovense, mode = "live") {
@@ -3908,6 +6365,9 @@ function normalizeRuleDurationMs(value, lineNumber) {
   if (rounded < 0) {
     throw new Error(`Line ${lineNumber}: duration must be 0 or greater.`);
   }
+  if (rounded > 0 && rounded < MIN_LOVENSE_ACTION_DURATION_MS) {
+    throw new Error(`Line ${lineNumber}: action duration must be at least ${MIN_LOVENSE_ACTION_DURATION_MS} ms.`);
+  }
   return rounded;
 }
 
@@ -3945,26 +6405,46 @@ function getEntryModeSummary(entry) {
   const executionMode = normalizeExecutionMode(entry.executionMode);
   if (executionMode === "lovense-live") {
     const normalizedLovense = normalizeLovenseConfig(entry.lovense);
-    const connection = getSelectedConnection(normalizedLovense);
-    return (
-      `${connection?.label || "User"} | ` +
-      `${formatLovenseSelectedToySummary(connection?.selectedToys || [], "no device")} | ` +
-      `${connection?.host || "-"}:${connection?.port || "-"}`
-    );
+    const activeConnections = getActiveLiveConnections(normalizedLovense);
+    if (!activeConnections.length) {
+      return "No active users";
+    }
+    return activeConnections
+      .map(
+        (connection) =>
+          `${connection.label || "User"}: ${formatLovenseSelectedToySummary(connection.selectedToys || [], "no device")} | ` +
+          `${connection.host || "-"}:${connection.port || "-"}`,
+      )
+      .join("; ");
   }
 
   if (executionMode === "lovense-test") {
     const normalizedLovense = normalizeLovenseConfig(entry.lovense);
-    return `${formatLovenseSelectedToySummary(normalizedLovense.testSelectedToys || [], "simulated device")} | simulated`;
+    const activeConnections = getActiveLiveConnections(normalizedLovense);
+    if (!activeConnections.length) {
+      return "No active users";
+    }
+    return activeConnections
+      .map((connection) => {
+        const connectionLovense = normalizeLovenseConfig({
+          ...normalizedLovense,
+          selectedConnectionId: connection.id,
+          activeConnectionIds: [connection.id],
+          testSelectedToys: (connection.testSelectedToys || []).length ? connection.testSelectedToys : normalizedLovense.testSelectedToys,
+        });
+        return `${connection.label || "User"}: ${formatLovenseSelectedToySummary(
+          getEffectiveLovenseSelectedToys(connectionLovense, "test"),
+          "simulated device",
+        )} | simulated`;
+      })
+      .join("; ");
   }
 
   const normalizedLovense = normalizeLovenseConfig(entry.lovense);
   const connection = getSelectedConnection(normalizedLovense);
-  return (
-    `${connection?.label || "User"} | ` +
-    `${formatLovenseSelectedToySummary(connection?.selectedToys || [], "no device")} | ` +
-    `${connection?.host || "-"}:${connection?.port || "-"}`
-  );
+  return `${connection?.label || "User"} | ${formatLovenseSelectedToySummary(connection?.selectedToys || [], "no device")} | ${
+    connection?.host || "-"
+  }:${connection?.port || "-"}`;
 }
 
 function cloneJson(value) {
@@ -4013,6 +6493,41 @@ async function uploadTextToLibrary(kind, fileName, content) {
   return data;
 }
 
+async function uploadUrlToLibrary(kind, fileName, url) {
+  const sourceResponse = await fetch(url, { cache: "no-store" });
+  if (!sourceResponse.ok) {
+    throw new Error(`HTTP ${sourceResponse.status}`);
+  }
+  const blob = await sourceResponse.blob();
+  return uploadBlobToLibrary(kind, fileName, blob, sourceResponse.headers.get("Content-Type") || blob.type);
+}
+
+async function uploadBlobToLibrary(kind, fileName, blob, contentType = "") {
+  const response = await fetch(buildLibraryImportUrl(kind, fileName), {
+    method: "PUT",
+    headers: {
+      "Content-Type": contentType || "application/octet-stream",
+    },
+    body: blob,
+  });
+  const data = await parseJsonResponse(response);
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
+async function importAndroidDocumentToLibrary(kind, fileName, uri) {
+  const response = await fetch(buildAndroidDocumentImportUrl(kind, fileName, uri), {
+    method: "POST",
+  });
+  const data = await parseJsonResponse(response);
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+  return data;
+}
+
 async function openLibraryDirectory(kind) {
   if (!state.library.capabilities.reveal) {
     return;
@@ -4037,6 +6552,29 @@ async function openLibraryDirectory(kind) {
 
 function buildLibraryImportUrl(kind, fileName) {
   return `/api/library/import?kind=${encodeURIComponent(kind)}&filename=${encodeURIComponent(fileName)}`;
+}
+
+function buildLibraryListUrl(kind) {
+  return `/api/library/list?kind=${encodeURIComponent(kind)}`;
+}
+
+function buildLibraryFileUrl(kind, fileName) {
+  return `/api/library/file?kind=${encodeURIComponent(kind)}&filename=${encodeURIComponent(fileName)}`;
+}
+
+function buildLocalFileUrl(kind, filePath) {
+  return `/api/local-file?kind=${encodeURIComponent(kind)}&path=${encodeURIComponent(filePath)}`;
+}
+
+function buildAndroidDocumentFileUrl(kind, uri) {
+  return `/api/android/document-file?kind=${encodeURIComponent(kind)}&uri=${encodeURIComponent(uri)}`;
+}
+
+function buildAndroidDocumentImportUrl(kind, fileName, uri) {
+  return (
+    `/api/android/import-document?kind=${encodeURIComponent(kind)}` +
+    `&filename=${encodeURIComponent(fileName)}&uri=${encodeURIComponent(uri)}`
+  );
 }
 
 async function parseJsonResponse(response) {
@@ -4086,6 +6624,7 @@ function normalizeSelectedDocument(document) {
     token: String(document.token).trim(),
     kind: String(document.kind || "").trim(),
     name: String(document.name || "").trim(),
+    uri: String(document.uri || "").trim(),
     mimeType: String(document.mimeType || "").trim(),
     sizeBytes: Number.isFinite(Number(document.sizeBytes)) ? Number(document.sizeBytes) : null,
   };
@@ -4136,15 +6675,27 @@ function loadEntry(entryId, options = {}) {
   stopSchedulerLoop();
   clearScheduledLovenseActions();
   sendLovenseStopForCurrentEntry(null, { force: true });
+  state.ruleExecutionPaused = false;
+  state.suppressNextPauseStop = false;
   state.currentEntryId = entry.id;
   state.nextActionIndex = 0;
   state.lastTriggeredIndex = null;
   highlightActionRow(null);
-  ui.video.src = entry.videoUrl;
+  if (entry.videoUrl) {
+    ui.video.src = entry.videoUrl;
+  } else {
+    ui.video.removeAttribute("src");
+    appendLog({
+      ok: false,
+      title: "Video unavailable",
+      detail: `${entry.title} has no verified video source. Import the video into the Library or load a playlist file that points to an available video.`,
+    });
+  }
   ui.video.load();
   ui.executionMode.value = normalizeExecutionMode(entry.executionMode) || DEFAULT_EXECUTION_MODE;
   ui.lovenseRules.value = entry.rulesText || DEFAULT_RULES_TEXT;
   applyLovenseConfigToForm(entry.lovense || DEFAULT_LOVENSE_CONFIG);
+  syncLovenseRuleTextareaFromSelectedConnection();
   renderExecutionModeForm();
   renderLovenseToySelect(getCurrentSelectedToyIds(), getCurrentAvailableToys(), getCurrentToyFallbacks(entry.lovense));
   updateLovenseSelectionDetails(getSelectedToysForCurrentMode(entry.lovense));
@@ -4164,6 +6715,8 @@ function clearCurrentEntry() {
   stopSchedulerLoop();
   clearScheduledLovenseActions();
   sendLovenseStopForCurrentEntry(null, { force: true });
+  state.ruleExecutionPaused = false;
+  state.suppressNextPauseStop = false;
   ui.video.pause();
   ui.video.removeAttribute("src");
   ui.video.load();
@@ -4172,6 +6725,7 @@ function clearCurrentEntry() {
   state.lastTriggeredIndex = null;
   highlightActionRow(null);
   applyLovenseConfigToForm(DEFAULT_LOVENSE_CONFIG);
+  ui.lovenseRules.value = DEFAULT_RULES_TEXT;
   renderExecutionModeForm();
   renderLovenseToySelect(getCurrentSelectedToyIds(), getCurrentAvailableToys(), getCurrentToyFallbacks());
   updateLovenseSelectionDetails(getSelectedToysForCurrentMode());
@@ -4182,7 +6736,9 @@ function clearCurrentEntry() {
 }
 
 function revokeEntryResources(entry) {
-  URL.revokeObjectURL(entry.videoUrl);
+  if (typeof entry.videoUrl === "string" && entry.videoUrl.startsWith("blob:")) {
+    URL.revokeObjectURL(entry.videoUrl);
+  }
 }
 
 function getNextEntryId() {
@@ -4206,10 +6762,25 @@ function getNextEntryId() {
   return currentIndex < state.playlist.length - 1 ? state.playlist[currentIndex + 1].id : null;
 }
 
+function getPreviousEntryId() {
+  if (!state.playlist.length || !state.currentEntryId) {
+    return null;
+  }
+
+  const currentIndex = state.playlist.findIndex((entry) => entry.id === state.currentEntryId);
+  if (currentIndex <= 0) {
+    return null;
+  }
+
+  return state.playlist[currentIndex - 1].id;
+}
+
 function handleVideoEnded() {
   stopSchedulerLoop();
   clearScheduledLovenseActions();
   sendLovenseStopForCurrentEntry(null, { force: true });
+  state.ruleExecutionPaused = false;
+  state.suppressNextPauseStop = false;
   const nextEntryId = getNextEntryId();
   if (!nextEntryId) {
     appendLog({ ok: true, title: "Playback finished", detail: "No further playlist entry available." });
@@ -4220,7 +6791,11 @@ function handleVideoEnded() {
 }
 
 function formatPlaybackMode(mode) {
-  return mode === "random" ? "Random" : "Sequential";
+  return normalizePlaybackMode(mode) === "random" ? "Random" : "Sequential";
+}
+
+function normalizePlaybackMode(mode) {
+  return mode === "random" ? "random" : "sequential";
 }
 
 function findNextActionIndex(actions, currentMs) {

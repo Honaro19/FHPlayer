@@ -220,6 +220,19 @@ test("validateLovenseRulesForConfig rejects unsupported targeted actions", () =>
   );
 });
 
+test("getAvailableLovenseActionKeysForToys limits Solace actions to Solace capabilities", () => {
+  const actionKeys = engine.getAvailableLovenseActionKeysForToys([
+    {
+      id: "sim-solace",
+      name: "Solace Simulator",
+      nickName: "Solace Simulator",
+      type: "Solace",
+    },
+  ]);
+
+  assert.deepEqual(toPlainJson(actionKeys), ["all", "thrusting", "depth", "stop"]);
+});
+
 test("validateSelectedFunscriptFiles accepts .funscript and .json files", () => {
   assert.doesNotThrow(() =>
     engine.validateSelectedFunscriptFiles([
@@ -273,6 +286,30 @@ test("groupLovenseCommandsByDelay groups commands in ascending delay order", () 
       { delayMs: 250, actions: ["Rotate:3", "Pump:2"] },
     ],
   );
+});
+
+test("buildLovensePayloadCommands starts short local-auto-stop commands", () => {
+  const commands = engine.buildLovensePayloadCommands(
+    {
+      delayMs: 0,
+      commands: [
+        {
+          action: "Vibrate:18",
+          toyIds: ["toy-a"],
+          delayMs: 0,
+          durationMs: 200,
+          stopPrevious: 1,
+        },
+      ],
+    },
+    true,
+  );
+
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].timeSec, 1);
+  assert.equal(commands[0].localAutoStopDurationMs, 200);
+  assert.equal(commands[0].usesLocalAutoStop, true);
+  assert.equal(commands[0].durationMs, undefined);
 });
 
 test("pairVideosWithScripts prefers filename matches before fallback pairing", () => {
@@ -343,14 +380,24 @@ test("extractScriptSettings prefers metadata.fhplayer over legacy root values", 
   assert.equal(settings.lovense.testSelectedToys.length, 1);
 });
 
-test("buildSavedFunscriptDocument writes schemaVersion 2 metadata without dropping existing data", () => {
+test("buildSavedFunscriptDocument removes FHPlayer rule metadata without dropping normal data", () => {
   const document = toPlainJson(
     engine.buildSavedFunscriptDocument({
       scriptDocument: {
         actions: [{ at: 100, pos: 50 }],
         metadata: {
           title: "Original title",
+          fhplayer: {
+            rulesText: "if pos >= 1 then stop()",
+          },
+          fh_player: {
+            rulesText: "if pos >= 2 then stop()",
+          },
         },
+        fhplayer: {
+          rulesText: "if pos >= 3 then stop()",
+        },
+        rulesText: "if pos >= 4 then stop()",
       },
       executionMode: "lovense-live",
       rulesText: "if pos >= 15 then vibrate(10)\nelse stop()",
@@ -380,12 +427,475 @@ test("buildSavedFunscriptDocument writes schemaVersion 2 metadata without droppi
   );
 
   assert.equal(document.metadata.title, "Original title");
-  assert.equal(document.metadata.fhplayer.schemaVersion, 2);
-  assert.equal(document.metadata.fhplayer.executionMode, "lovense-live");
-  assert.equal(document.metadata.fhplayer.connections, undefined);
-  assert.equal(document.metadata.fhplayer.lovense.selectedConnectionId, "user-2");
-  assert.equal(document.metadata.fhplayer.lovense.connections[0].host, "192.168.0.2");
+  assert.equal(document.metadata.fhplayer, undefined);
+  assert.equal(document.metadata.fh_player, undefined);
+  assert.equal(document.fhplayer, undefined);
+  assert.equal(document.rulesText, undefined);
   assert.equal(document.actions.length, 1);
+});
+
+test("saved playlist entries keep Lovense programs separate from the funscript document", () => {
+  const savedEntry = toPlainJson(
+    engine.buildSavedPlaylistEntry(
+      {
+        title: "Scene A",
+        videoName: "scene.mp4",
+        videoSource: {
+          kind: "videos",
+          name: "scene.mp4",
+          source: "library",
+          path: "C:\\Media\\scene.mp4",
+        },
+        funscriptName: "shared.funscript",
+        funscriptSource: {
+          kind: "funscripts",
+          name: "shared.funscript",
+          source: "library",
+          path: "C:\\Media\\shared.funscript",
+        },
+        scriptDocument: {
+          actions: [{ at: 100, pos: 50 }],
+          metadata: {
+            fhplayer: {
+              rulesText: "if pos >= 1 then stop()",
+            },
+          },
+        },
+        executionMode: "lovense-test",
+        rulesText: "if pos >= 10 then vibrate(8)\nelse stop()",
+        lovense: engine.normalizeLovenseConfig({
+          testSelectedToys: [
+            {
+              id: "sim-nora",
+              name: "Nora Simulator",
+              nickName: "Nora Simulator",
+              type: "Nora",
+              fullFunctionNames: ["Vibrate", "Rotate"],
+            },
+          ],
+        }),
+      },
+      0,
+    ),
+  );
+
+  assert.equal(savedEntry.video.name, "scene.mp4");
+  assert.equal(savedEntry.video.path, "C:\\Media\\scene.mp4");
+  assert.equal(savedEntry.funscript.name, "shared.funscript");
+  assert.equal(savedEntry.funscript.path, "C:\\Media\\shared.funscript");
+  assert.equal(savedEntry.funscript.document.metadata.fhplayer, undefined);
+  assert.equal(savedEntry.execution.mode, "lovense-test");
+  assert.equal(savedEntry.execution.rulesText, "if pos >= 10 then vibrate(8)\nelse stop()");
+  assert.equal(savedEntry.execution.lovense.testSelectedToys, undefined);
+  assert.equal(savedEntry.execution.lovense.connectionRules[0].connectionId, "user-1");
+  assert.equal(savedEntry.execution.lovense.connectionRules[0].rulesText, "if pos >= 10 then vibrate(8)\nelse stop()");
+});
+
+test("live playlist entries store active users and per-user rule scripts", () => {
+  const playlistLovense = engine.normalizeLovenseConfig({
+    selectedConnectionId: "user-2",
+    activeConnectionIds: ["user-1", "user-2"],
+    connections: [
+      {
+        id: "user-1",
+        label: "User 1",
+        scheme: "http",
+        host: "192.168.0.10",
+        port: "20010",
+        platformName: "FHPlayer",
+        selectedToys: [
+          {
+            id: "toy-a",
+            name: "Nora",
+            nickName: "Nora",
+            type: "Nora",
+            fullFunctionNames: ["Vibrate", "Rotate"],
+          },
+        ],
+      },
+      {
+        id: "user-2",
+        label: "User 2",
+        scheme: "http",
+        host: "192.168.0.11",
+        port: "20010",
+        platformName: "FHPlayer",
+        selectedToys: [
+          {
+            id: "toy-b",
+            name: "Max 2",
+            nickName: "Max 2",
+            type: "Max 2",
+            fullFunctionNames: ["Pump"],
+          },
+        ],
+      },
+    ],
+  });
+  const savedEntry = toPlainJson(
+    engine.buildSavedPlaylistEntry(
+      {
+        title: "Multi User Scene",
+        videoName: "scene.mp4",
+        videoSource: { kind: "videos", name: "scene.mp4", source: "library" },
+        funscriptName: "scene.funscript",
+        funscriptSource: { kind: "funscripts", name: "scene.funscript", source: "library" },
+        scriptDocument: { actions: [{ at: 100, pos: 50 }] },
+        executionMode: "lovense-live",
+        rulesText: "if pos >= 1 then stop()",
+        lovense: engine.normalizeLovenseConfig({
+          ...playlistLovense,
+          connections: playlistLovense.connections.map((connection) => ({
+            ...connection,
+            rulesText:
+              connection.id === "user-1"
+                ? "if pos >= 10 then vibrate(6)\nelse stop()"
+                : "if pos >= 10 then pump(2)\nelse stop()",
+          })),
+        }),
+      },
+      0,
+    ),
+  );
+
+  assert.deepEqual(toPlainJson(savedEntry.execution.lovense.activeConnectionIds), ["user-1", "user-2"]);
+  assert.equal(savedEntry.execution.lovense.connections, undefined);
+  assert.equal(savedEntry.execution.lovense.connectionRules[0].rulesText, "if pos >= 10 then vibrate(6)\nelse stop()");
+  assert.equal(savedEntry.execution.lovense.connectionRules[1].rulesText, "if pos >= 10 then pump(2)\nelse stop()");
+
+  const loadedEntry = engine.createPlaylistEntryFromSaved(savedEntry, 0, playlistLovense);
+  const programs = toPlainJson(engine.getActiveLovenseRulePrograms(loadedEntry));
+  assert.deepEqual(programs.map((program) => program.label), ["User 1", "User 2"]);
+  assert.deepEqual(programs.map((program) => program.rulesText), [
+    "if pos >= 10 then vibrate(6)\nelse stop()",
+    "if pos >= 10 then pump(2)\nelse stop()",
+  ]);
+});
+
+test("saved playlist document stores users globally and entry rules per user", () => {
+  const entryLovense = {
+    selectedConnectionId: "user-2",
+    activeConnectionIds: ["user-1", "user-2"],
+    connections: [
+      {
+        id: "user-1",
+        label: "User 1",
+        scheme: "http",
+        host: "192.168.0.10",
+        port: "20010",
+        platformName: "FHPlayer",
+        rulesText: "if pos >= 10 then vibrate(6)\nelse stop()",
+        selectedToys: [
+          {
+            id: "toy-a",
+            name: "Nora",
+            nickName: "Nora",
+            type: "Nora",
+            fullFunctionNames: ["Vibrate", "Rotate"],
+          },
+        ],
+        testSelectedToys: [
+          {
+            id: "sim-nora",
+            name: "Nora Simulator",
+            nickName: "Nora Simulator",
+            type: "Nora",
+            fullFunctionNames: ["Vibrate", "Rotate"],
+          },
+        ],
+      },
+      {
+        id: "user-2",
+        label: "User 2",
+        scheme: "http",
+        host: "192.168.0.11",
+        port: "20010",
+        platformName: "FHPlayer",
+        rulesText: "if pos >= 10 then pump(2)\nelse stop()",
+        selectedToys: [
+          {
+            id: "toy-b",
+            name: "Max 2",
+            nickName: "Max 2",
+            type: "Max 2",
+            fullFunctionNames: ["Pump"],
+          },
+        ],
+        testSelectedToys: [
+          {
+            id: "sim-max2",
+            name: "Max 2 Simulator",
+            nickName: "Max 2 Simulator",
+            type: "Max 2",
+            fullFunctionNames: ["Vibrate", "Pump"],
+          },
+        ],
+      },
+    ],
+  };
+
+  vm.runInContext(
+    `
+      state.formLovense = normalizeLovenseConfig(${JSON.stringify(entryLovense)});
+      ui.lovenseRules.value = "if pos >= 10 then pump(2)\\nelse stop()";
+      state.playlistLovense = normalizeLovenseConfig(${JSON.stringify(entryLovense)});
+      state.playlist = [{
+        id: "entry-global-users",
+        title: "Global Users",
+        videoName: "scene.mp4",
+        videoSource: { kind: "videos", name: "scene.mp4", source: "library" },
+        funscriptName: "scene.funscript",
+        funscriptSource: { kind: "funscripts", name: "scene.funscript", source: "library" },
+        scriptDocument: { actions: [{ at: 100, pos: 50 }] },
+        executionMode: "lovense-test",
+        rulesText: "if pos >= 1 then stop()",
+        lovense: normalizeLovenseConfig(${JSON.stringify(entryLovense)}),
+      }];
+      state.playbackMode = "sequential";
+    `,
+    engine,
+  );
+
+  const document = toPlainJson(engine.buildSavedPlaylistDocument());
+
+  assert.equal(document.lovense.connections.length, 2);
+  assert.equal(document.lovense.activeConnectionIds, undefined);
+  assert.equal(document.lovense.connections[0].rulesText, undefined);
+  assert.equal(document.lovense.connections[0].testSelectedToys[0].id, "sim-nora");
+  assert.equal(document.lovense.connections[1].testSelectedToys[0].id, "sim-max2");
+  assert.equal(document.entries[0].execution.lovense.connections, undefined);
+  assert.equal(document.entries[0].execution.lovense.connectionRules[0].rulesText, "if pos >= 10 then vibrate(6)\nelse stop()");
+  assert.equal(document.entries[0].execution.lovense.connectionRules[1].rulesText, "if pos >= 10 then pump(2)\nelse stop()");
+});
+
+test("Lovense test entries run per active playlist user", () => {
+  const playlistLovense = engine.normalizeLovenseConfig({
+    selectedConnectionId: "user-1",
+    connections: [
+      {
+        id: "user-1",
+        label: "User 1",
+        testSelectedToys: [
+          {
+            id: "sim-nora",
+            name: "Nora Simulator",
+            nickName: "Nora Simulator",
+            type: "Nora",
+            fullFunctionNames: ["Vibrate", "Rotate"],
+          },
+        ],
+      },
+      {
+        id: "user-2",
+        label: "User 2",
+        testSelectedToys: [
+          {
+            id: "sim-max2",
+            name: "Max 2 Simulator",
+            nickName: "Max 2 Simulator",
+            type: "Max 2",
+            fullFunctionNames: ["Vibrate", "Pump"],
+          },
+        ],
+      },
+    ],
+  });
+  const entry = engine.createPlaylistEntryFromSaved(
+    {
+      title: "Test Users",
+      video: { name: "scene.mp4" },
+      funscript: { name: "scene.funscript", document: { actions: [{ at: 100, pos: 50 }] } },
+      execution: {
+        mode: "lovense-test",
+        lovense: {
+          activeConnectionIds: ["user-1", "user-2"],
+          connectionRules: [
+            { connectionId: "user-1", rulesText: "if pos >= 1 then vibrate(6)\nelse stop()" },
+            { connectionId: "user-2", rulesText: "if pos >= 1 then pump(2)\nelse stop()" },
+          ],
+        },
+      },
+    },
+    0,
+    playlistLovense,
+  );
+
+  const programs = toPlainJson(engine.getActiveLovenseRulePrograms(entry));
+
+  assert.deepEqual(programs.map((program) => program.label), ["User 1", "User 2"]);
+  assert.deepEqual(programs.map((program) => program.rulesText), [
+    "if pos >= 1 then vibrate(6)\nelse stop()",
+    "if pos >= 1 then pump(2)\nelse stop()",
+  ]);
+  assert.equal(programs[0].lovense.testSelectedToys[0].id, "sim-nora");
+  assert.equal(programs[1].lovense.testSelectedToys[0].id, "sim-max2");
+});
+
+test("saved playlist entries keep Android document URIs playable", () => {
+  const uri = "content://com.android.providers.media.documents/document/video%3A42";
+  const savedEntry = toPlainJson(
+    engine.buildSavedPlaylistEntry(
+      {
+        title: "Android Scene",
+        videoName: "scene.mp4",
+        videoSource: {
+          kind: "videos",
+          name: "scene.mp4",
+          source: "android-document",
+          uri,
+        },
+        funscriptName: "scene.funscript",
+        funscriptSource: {
+          kind: "funscripts",
+          name: "scene.funscript",
+          source: "android-document",
+          uri: "content://com.android.providers.downloads.documents/document/7",
+        },
+        scriptDocument: { actions: [{ at: 100, pos: 50 }] },
+        executionMode: "lovense-test",
+        rulesText: "if pos >= 10 then vibrate(8)\nelse stop()",
+        lovense: engine.normalizeLovenseConfig({}),
+      },
+      0,
+    ),
+  );
+
+  assert.equal(savedEntry.video.uri, uri);
+  assert.equal(savedEntry.video.source, "android-document");
+  assert.equal(savedEntry.funscript.uri, "content://com.android.providers.downloads.documents/document/7");
+
+  const previousPlatform = vm.runInContext("state.backendCapabilities.platform", engine);
+  vm.runInContext("state.backendCapabilities.platform = 'android';", engine);
+  try {
+    const entry = engine.createPlaylistEntryFromSaved(
+      {
+        title: "Android Scene",
+        video: savedEntry.video,
+        funscript: {
+          name: "scene.funscript",
+          document: { actions: [{ at: 100, pos: 50 }] },
+        },
+      },
+      0,
+    );
+    assert.equal(
+      entry.videoUrl,
+      `/api/android/document-file?kind=videos&uri=${encodeURIComponent(uri)}`,
+    );
+  } finally {
+    vm.runInContext(`state.backendCapabilities.platform = ${JSON.stringify(previousPlatform)};`, engine);
+  }
+});
+
+test("loading playlist entries allows the same funscript with different Lovense programs", () => {
+  const sharedScriptDocument = {
+    actions: [
+      { at: 200, pos: 5 },
+      { at: 400, pos: 20 },
+    ],
+  };
+
+  const firstEntry = toPlainJson(
+    engine.createPlaylistEntryFromSaved(
+      {
+        title: "Playlist One",
+        video: { name: "scene.mp4" },
+        funscript: { name: "shared.funscript", document: sharedScriptDocument },
+        execution: {
+          mode: "lovense-test",
+          rulesText: "if pos >= 10 then vibrate(6)\nelse stop()",
+          lovense: {
+            testSelectedToys: [
+              {
+                id: "sim-nora",
+                name: "Nora Simulator",
+                nickName: "Nora Simulator",
+                type: "Nora",
+                fullFunctionNames: ["Vibrate", "Rotate"],
+              },
+            ],
+          },
+        },
+      },
+      0,
+    ),
+  );
+  const secondEntry = toPlainJson(
+    engine.createPlaylistEntryFromSaved(
+      {
+        title: "Playlist Two",
+        video: { name: "scene.mp4" },
+        funscript: { name: "shared.funscript", document: sharedScriptDocument },
+        execution: {
+          mode: "lovense-test",
+          rulesText: "if pos >= 10 then rotate(3)\nelse stop()",
+          lovense: {
+            testSelectedToys: [
+              {
+                id: "sim-max2",
+                name: "Max 2 Simulator",
+                nickName: "Max 2 Simulator",
+                type: "Max 2",
+                fullFunctionNames: ["Vibrate", "Pump"],
+              },
+            ],
+          },
+        },
+      },
+      1,
+    ),
+  );
+
+  assert.equal(firstEntry.funscriptName, "shared.funscript");
+  assert.equal(secondEntry.funscriptName, "shared.funscript");
+  assert.equal(firstEntry.videoUrl, "/api/library/file?kind=videos&filename=scene.mp4");
+  assert.equal(firstEntry.actions.length, 2);
+  assert.notEqual(firstEntry.rulesText, secondEntry.rulesText);
+  assert.equal(firstEntry.lovense.testSelectedToys[0].id, "sim-nora");
+  assert.equal(secondEntry.lovense.testSelectedToys[0].id, "sim-max2");
+});
+
+test("loading saved playlist leaves missing videos unloaded", async () => {
+  const previousFetch = engine.fetch;
+  const previousServe = vm.runInContext("state.library.capabilities.serve", engine);
+  const previousLocalFiles = vm.runInContext("state.library.capabilities.localFiles", engine);
+  const requestedUrls = [];
+
+  engine.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    return { ok: false };
+  };
+  vm.runInContext("state.library.capabilities.serve = true;", engine);
+  vm.runInContext("state.library.capabilities.localFiles = true;", engine);
+
+  try {
+    const warnings = [];
+    const videoUrl = await engine.resolveSavedVideoUrl(
+      {
+        kind: "videos",
+        name: "scene.mp4",
+        path: "C:\\Missing\\scene.mp4",
+        libraryName: "scene.mp4",
+      },
+      "scene.mp4",
+      warnings,
+    );
+
+    assert.equal(videoUrl, "");
+    assert.match(warnings.join(" "), /Video file could not be loaded/);
+    assert.equal(requestedUrls.length, 2);
+  } finally {
+    engine.fetch = previousFetch;
+    vm.runInContext(`state.library.capabilities.serve = ${JSON.stringify(previousServe)};`, engine);
+    vm.runInContext(`state.library.capabilities.localFiles = ${JSON.stringify(previousLocalFiles)};`, engine);
+  }
+});
+
+test("playlist library filenames are normalized from display names", () => {
+  assert.equal(engine.buildPlaylistLibraryFileName("My Playlist"), "My Playlist.fhplaylist");
+  assert.equal(engine.buildPlaylistLibraryFileName("archive.json"), "archive.fhplaylist");
+  assert.equal(engine.buildPlaylistLibraryFileName("C:\\Media\\Bad<Name>.fhplaylist"), "BadName.fhplaylist");
+  assert.throws(() => engine.buildPlaylistLibraryFileName("?.json"), /Enter a playlist name/);
 });
 
 test("validateLovenseRulesForConfig rejects delay-only branches", () => {
@@ -398,6 +908,45 @@ test("validateLovenseRulesForConfig rejects delay-only branches", () => {
         mode: "test",
       }),
     /delay\(\) cannot be the only command in a branch/,
+  );
+});
+
+test("evaluateLovenseRuleCommands rejects direct action durations under 200 ms", () => {
+  const config = createTestLovenseConfig(engine);
+
+  assert.throws(
+    () =>
+      engine.evaluateLovenseRuleCommands(
+        "if pos >= 1 then vibrate(10, 199)",
+        config,
+        { pos: 10, index: 0, atMs: 0, currentMs: 0, deltaMs: 0 },
+        {
+          requireToyId: false,
+          mode: "test",
+        },
+      ),
+    /duration must be at least 200 ms/,
+  );
+});
+
+test("evaluateLovenseRuleCommands rejects variable action durations under 200 ms", () => {
+  const config = createTestLovenseConfig(engine);
+
+  assert.throws(
+    () =>
+      engine.evaluateLovenseRuleCommands(
+        [
+          "let shortDuration = 150",
+          "if pos >= 1 then vibrate(10, shortDuration)",
+        ].join("\n"),
+        config,
+        { pos: 10, index: 0, atMs: 0, currentMs: 0, deltaMs: 0 },
+        {
+          requireToyId: false,
+          mode: "test",
+        },
+      ),
+    /duration must be at least 200 ms/,
   );
 });
 
@@ -426,20 +975,24 @@ test("normalizeLovenseConfig keeps legacy live and test toy fields usable", () =
   assert.deepEqual(normalized.testCapabilities, ["Vibrate", "Pump"]);
 });
 
-let failures = 0;
-tests.forEach(({ name, fn }) => {
-  try {
-    fn();
-    console.log(`ok - ${name}`);
-  } catch (error) {
-    failures += 1;
-    console.error(`not ok - ${name}`);
-    console.error(error.stack || String(error));
+async function runTests() {
+  let failures = 0;
+  for (const { name, fn } of tests) {
+    try {
+      await fn();
+      console.log(`ok - ${name}`);
+    } catch (error) {
+      failures += 1;
+      console.error(`not ok - ${name}`);
+      console.error(error.stack || String(error));
+    }
   }
-});
 
-if (failures > 0) {
-  process.exitCode = 1;
-} else {
-  console.log(`All ${tests.length} rule-engine tests passed.`);
+  if (failures > 0) {
+    process.exitCode = 1;
+  } else {
+    console.log(`All ${tests.length} rule-engine tests passed.`);
+  }
 }
+
+runTests();

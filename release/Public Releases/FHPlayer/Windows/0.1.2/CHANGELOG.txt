@@ -1,0 +1,6 @@
+FHPlayer 0.1.2
+
+- Added Library playlist saving with editable names and automatic replacement of renamed Library playlists.
+- Moved playlist actions into the Playlist area and added Library delete flows for videos, funscripts, and playlists.
+- Improved loading saved playlists when referenced video or funscript paths are missing.
+- Fixed Android Library playlist loading crashes caused by interrupted local file streams.

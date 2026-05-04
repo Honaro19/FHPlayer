@@ -1,11 +1,12 @@
 {
     "schema_version":  1,
     "app":  "FHPlayer",
-    "latest_version":  "0.1.1",
+    "latest_version":  "0.1.2",
     "release_notes":  [
-                          "Added UI visibility settings for diagnostics, the funscript overview, and the execution log.",
-                          "Added rotating application logs and release build flows for Windows and Android.",
-                          "Consolidated release tooling, smoke tests, and manifest-based update delivery."
+                          "Added Library playlist saving with editable names and automatic replacement of renamed Library playlists.",
+                          "Moved playlist actions into the Playlist area and added Library delete flows for videos, funscripts, and playlists.",
+                          "Improved loading saved playlists when referenced video or funscript paths are missing.",
+                          "Fixed Android Library playlist loading crashes caused by interrupted local file streams."
                       ],
     "platforms":  {
                       "windows":  {
@@ -13,8 +14,8 @@
                                       "installer_url":  null,
                                       "portable_url":  null,
                                       "sha256":  {
-                                                     "installer":  "4978ec86262892436ad51ef2253a4e4436172a1712b1dc6647af17477fcc14f8",
-                                                     "portable":  "493cfdba00d6d738826daf5ee063457ef7174420fc1dee79b26fa07767a2f9ad"
+                                                     "installer":  "bbd4d4e3cd83672130216336a4a5e7377f2bccb1ce68df679486571a6cf2d679",
+                                                     "portable":  "7c125d43f36ab73ca939b6fba8bd25166d75d830ef39d95e4df4f37dfd1d557d"
                                                  }
                                   },
                       "android":  {
@@ -22,8 +23,8 @@
                                       "apk_url":  null,
                                       "aab_url":  null,
                                       "sha256":  {
-                                                     "apk":  "aff164e0e8cee0bd9340559b352741fe49114b72d34e5c63b729276d4ecc6190",
-                                                     "aab":  "2eca5c5d653308ddc0dbc7e5bf35349352cf7ed68da3a9b25105a9c42f5c679a"
+                                                     "apk":  "d2920cf9d95ac6412740628e973cece6ed1899d26f419b7104b22a02f8218b9a",
+                                                     "aab":  "338ca4321562ccdc9421dfaa6374f802ce9219bc36b24f1f460d619341449e6b"
                                                  }
                                   }
                   }

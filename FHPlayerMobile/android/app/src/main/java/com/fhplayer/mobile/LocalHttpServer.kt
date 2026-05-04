@@ -1,5 +1,7 @@
 package com.fhplayer.mobile
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
@@ -13,14 +15,17 @@ import java.io.ByteArrayOutputStream
 import java.io.EOFException
 import java.io.File
 import java.io.FileNotFoundException
+import java.io.FileInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.nio.charset.StandardCharsets
@@ -136,6 +141,7 @@ class LocalHttpServer(
                 .put("showDiagnostics", ui.optBoolean("showDiagnostics", true))
                 .put("showFunscriptOverview", ui.optBoolean("showFunscriptOverview", true))
                 .put("showExecutionLog", ui.optBoolean("showExecutionLog", true))
+                .put("showUpdates", ui.optBoolean("showUpdates", true))
         val normalizedLegal =
             JSONObject()
                 .put(
@@ -215,27 +221,75 @@ class LocalHttpServer(
     }
 
     private fun handleClient(socket: Socket) {
-        socket.use { client ->
-            client.soTimeout = 10000
-            client.tcpNoDelay = true
-            val input = BufferedInputStream(client.getInputStream())
-            val output = client.getOutputStream()
-            try {
-                val request = parseRequest(input) ?: return
-                routeRequest(request, output)
-            } catch (exception: Exception) {
-                AppLogger.error(context, "Unhandled HTTP request failure.", exception)
-                respondJson(
-                    output,
-                    HTTP_INTERNAL_SERVER_ERROR,
-                    JSONObject()
-                        .put("ok", false)
-                        .put("error", exception.message ?: "Internal server error"),
-                )
-            } finally {
-                output.flush()
+        try {
+            socket.use { client ->
+                client.soTimeout = 10000
+                client.tcpNoDelay = true
+                val input = BufferedInputStream(client.getInputStream())
+                val output = client.getOutputStream()
+                try {
+                    val request = parseRequest(input) ?: return@use
+                    routeRequest(request, output)
+                } catch (exception: Exception) {
+                    if (isClientDisconnect(exception)) {
+                        logClientDisconnect(exception)
+                    } else {
+                        AppLogger.error(context, "Unhandled HTTP request failure.", exception)
+                        try {
+                            respondJson(
+                                output,
+                                HTTP_INTERNAL_SERVER_ERROR,
+                                JSONObject()
+                                    .put("ok", false)
+                                    .put("error", exception.message ?: "Internal server error"),
+                            )
+                        } catch (responseException: Exception) {
+                            if (isClientDisconnect(responseException)) {
+                                logClientDisconnect(responseException)
+                            } else {
+                                AppLogger.error(context, "Could not write HTTP error response.", responseException)
+                            }
+                        }
+                    }
+                } finally {
+                    try {
+                        output.flush()
+                    } catch (flushException: Exception) {
+                        if (isClientDisconnect(flushException)) {
+                            logClientDisconnect(flushException)
+                        } else {
+                            AppLogger.error(context, "Could not flush HTTP response.", flushException)
+                        }
+                    }
+                }
+            }
+        } catch (exception: Exception) {
+            if (isClientDisconnect(exception)) {
+                logClientDisconnect(exception)
+            } else {
+                AppLogger.error(context, "Could not handle HTTP client.", exception)
             }
         }
+    }
+
+    private fun isClientDisconnect(exception: Throwable): Boolean {
+        if (exception is EOFException || exception is SocketException) {
+            return true
+        }
+        val normalizedMessage = exception.message?.lowercase(Locale.US).orEmpty()
+        if (
+            normalizedMessage.contains("broken pipe") ||
+            normalizedMessage.contains("connection reset") ||
+            normalizedMessage.contains("socket closed")
+        ) {
+            return true
+        }
+        return exception.cause?.let { cause -> isClientDisconnect(cause) } ?: false
+    }
+
+    private fun logClientDisconnect(exception: Throwable) {
+        val detail = exception.message ?: exception.javaClass.simpleName
+        AppLogger.info(context, "HTTP client disconnected before the response finished: $detail.")
     }
 
     private fun routeRequest(request: HttpRequest, output: OutputStream) {
@@ -266,6 +320,14 @@ class LocalHttpServer(
                 respondJson(output, HTTP_OK, buildLibraryPayload())
             }
 
+            request.method == "GET" && path == "/api/library/list" -> {
+                handleLibraryList(requestUri, output)
+            }
+
+            (request.method == "GET" || request.method == "HEAD") && path == "/api/library/file" -> {
+                handleLibraryFile(requestUri, request, output)
+            }
+
             request.method == "GET" && path == "/api/settings" -> {
                 respondJson(output, HTTP_OK, buildSettingsPayload())
             }
@@ -276,6 +338,10 @@ class LocalHttpServer(
 
             request.method == "GET" && path == "/api/android/document-selection" -> {
                 handleDocumentSelection(requestUri, output)
+            }
+
+            (request.method == "GET" || request.method == "HEAD") && path == "/api/android/document-file" -> {
+                handleDocumentFile(requestUri, request, output)
             }
 
             request.method == "POST" && (path == "/api/lovense/detect" || path == "/api/lovense-detect") -> {
@@ -290,12 +356,24 @@ class LocalHttpServer(
                 handleLibraryImport(requestUri, request, output)
             }
 
+            request.method == "DELETE" && path == "/api/library/file" -> {
+                handleLibraryDelete(requestUri, output)
+            }
+
+            request.method == "POST" && path == "/api/android/import-document" -> {
+                handleAndroidDocumentImport(requestUri, output)
+            }
+
             request.method == "PUT" && path == "/api/android/document-write" -> {
                 handleDocumentWrite(requestUri, request, output)
             }
 
             request.method == "POST" && path == "/api/settings" -> {
                 handleSettingsUpdate(request, output)
+            }
+
+            request.method == "POST" && path == "/api/android/clipboard" -> {
+                handleClipboardWrite(request, output)
             }
 
             request.method == "POST" && path == "/api/update/check" -> {
@@ -459,6 +537,176 @@ class LocalHttpServer(
         }
     }
 
+    private fun handleLibraryDelete(requestUri: Uri, output: OutputStream) {
+        val libraryFile =
+            try {
+                val kind = requestUri.getQueryParameter("kind") ?: ""
+                val fileName = requestUri.getQueryParameter("filename") ?: ""
+                File(resolveLibraryDirectory(kind), sanitizeLibraryFileName(fileName))
+            } catch (exception: IllegalArgumentException) {
+                respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", exception.message))
+                return
+            }
+
+        if (!libraryFile.isFile) {
+            respondJson(
+                output,
+                HTTP_NOT_FOUND,
+                JSONObject()
+                    .put("ok", false)
+                    .put("error", "Library file was not found: ${libraryFile.name}"),
+            )
+            return
+        }
+
+        val sizeBytes = libraryFile.length()
+        try {
+            if (!libraryFile.delete()) {
+                throw IOException("Could not delete library file: ${libraryFile.name}")
+            }
+            respondJson(
+                output,
+                HTTP_OK,
+                JSONObject()
+                    .put("ok", true)
+                    .put("path", libraryFile.absolutePath)
+                    .put("fileName", libraryFile.name)
+                    .put("sizeBytes", sizeBytes),
+            )
+        } catch (exception: IOException) {
+            respondJson(output, HTTP_INTERNAL_SERVER_ERROR, JSONObject().put("ok", false).put("error", exception.message))
+        } catch (exception: SecurityException) {
+            respondJson(output, HTTP_INTERNAL_SERVER_ERROR, JSONObject().put("ok", false).put("error", exception.message))
+        }
+    }
+
+    private fun handleAndroidDocumentImport(requestUri: Uri, output: OutputStream) {
+        val kind = requestUri.getQueryParameter("kind") ?: ""
+        val fileName = requestUri.getQueryParameter("filename") ?: ""
+        val rawUri = requestUri.getQueryParameter("uri")?.trim().orEmpty()
+        if (rawUri.isBlank()) {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", "Document URI is required"))
+            return
+        }
+
+        val sourceUri =
+            try {
+                Uri.parse(rawUri)
+            } catch (_: Exception) {
+                respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", "Invalid document URI"))
+                return
+            }
+
+        if (sourceUri.scheme != "content") {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", "Only content document URIs are supported"))
+            return
+        }
+
+        try {
+            val destinationDirectory = resolveLibraryDirectory(kind)
+            val destinationFile = File(destinationDirectory, sanitizeLibraryFileName(fileName))
+            destinationFile.parentFile?.mkdirs()
+            context.contentResolver.openInputStream(sourceUri).use { input ->
+                if (input == null) {
+                    throw FileNotFoundException("Document could not be opened")
+                }
+                destinationFile.outputStream().use { outputStream ->
+                    input.copyTo(outputStream, 64 * 1024)
+                    outputStream.flush()
+                }
+            }
+
+            respondJson(
+                output,
+                HTTP_OK,
+                JSONObject()
+                    .put("ok", true)
+                    .put("path", destinationFile.absolutePath)
+                    .put("fileName", destinationFile.name)
+                    .put("sizeBytes", destinationFile.length()),
+            )
+        } catch (exception: IllegalArgumentException) {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", exception.message))
+        } catch (exception: SecurityException) {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", "Document access permission is missing"))
+        } catch (exception: IOException) {
+            respondJson(output, HTTP_INTERNAL_SERVER_ERROR, JSONObject().put("ok", false).put("error", exception.message))
+        }
+    }
+
+    private fun handleLibraryList(requestUri: Uri, output: OutputStream) {
+        try {
+            val kind = requestUri.getQueryParameter("kind") ?: ""
+            val directory = resolveLibraryDirectory(kind)
+            val files = JSONArray()
+            directory
+                .listFiles()
+                .orEmpty()
+                .filter { file -> file.isFile }
+                .sortedBy { file -> file.name.lowercase(Locale.US) }
+                .forEach { file ->
+                    files.put(
+                        JSONObject()
+                            .put("name", file.name)
+                            .put("path", file.absolutePath)
+                            .put("sizeBytes", file.length())
+                            .put("modifiedMs", file.lastModified()),
+                    )
+                }
+
+            respondJson(
+                output,
+                HTTP_OK,
+                JSONObject()
+                    .put("ok", true)
+                    .put("kind", kind.trim().lowercase(Locale.US))
+                    .put("files", files),
+            )
+        } catch (exception: IllegalArgumentException) {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", exception.message))
+        }
+    }
+
+    private fun handleLibraryFile(requestUri: Uri, request: HttpRequest, output: OutputStream) {
+        val libraryFile =
+            try {
+                val kind = requestUri.getQueryParameter("kind") ?: ""
+                val fileName = requestUri.getQueryParameter("filename") ?: ""
+                File(resolveLibraryDirectory(kind), sanitizeLibraryFileName(fileName))
+            } catch (exception: IllegalArgumentException) {
+                respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", exception.message))
+                return
+            }
+
+        if (!libraryFile.isFile) {
+            respondJson(
+                output,
+                HTTP_NOT_FOUND,
+                JSONObject()
+                    .put("ok", false)
+                    .put("error", "Library file was not found: ${libraryFile.name}"),
+            )
+            return
+        }
+
+        val requestedRange = request.headers["range"].orEmpty()
+        val range =
+            try {
+                parseHttpRange(requestedRange, libraryFile.length())
+            } catch (_: IllegalArgumentException) {
+                respondRangeNotSatisfiable(output, libraryFile.length())
+                return
+            }
+
+        respondFile(
+            output = output,
+            file = libraryFile,
+            contentType = guessContentType(libraryFile.name),
+            range = range,
+            sendBody = request.method != "HEAD",
+        )
+    }
+
     private fun handleDocumentSelection(requestUri: Uri, output: OutputStream) {
         val kind = requestUri.getQueryParameter("kind")?.trim()?.lowercase(Locale.US).orEmpty().ifBlank { "files" }
         val documents =
@@ -473,12 +721,95 @@ class LocalHttpServer(
                     .put("token", document.token)
                     .put("kind", document.kind)
                     .put("name", document.displayName)
+                    .put("uri", document.uri.toString())
                     .put("mimeType", document.mimeType)
                     .put("sizeBytes", document.sizeBytes),
             )
         }
 
         respondJson(output, HTTP_OK, JSONObject().put("ok", true).put("documents", payload))
+    }
+
+    private fun handleDocumentFile(requestUri: Uri, request: HttpRequest, output: OutputStream) {
+        val rawUri = requestUri.getQueryParameter("uri")?.trim().orEmpty()
+        if (rawUri.isBlank()) {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", "Document URI is required"))
+            return
+        }
+
+        val uri =
+            try {
+                Uri.parse(rawUri)
+            } catch (_: Exception) {
+                respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", "Invalid document URI"))
+                return
+            }
+
+        if (uri.scheme != "content") {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", "Only content document URIs are supported"))
+            return
+        }
+
+        val metadata =
+            try {
+                resolveDocumentMetadata(uri)
+            } catch (exception: Exception) {
+                respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", exception.message))
+                return
+            }
+        val contentType = context.contentResolver.getType(uri)?.ifBlank { null } ?: guessContentType(metadata.displayName)
+        val requestedRange = request.headers["range"].orEmpty()
+
+        try {
+            context.contentResolver.openAssetFileDescriptor(uri, "r").use { descriptor ->
+                if (descriptor == null) {
+                    throw FileNotFoundException("Document could not be opened")
+                }
+
+                val fileSize =
+                    when {
+                        descriptor.length >= 0 -> descriptor.length
+                        metadata.sizeBytes > 0 -> metadata.sizeBytes
+                        else -> -1L
+                    }
+                if (fileSize <= 0) {
+                    if (requestedRange.isNotBlank()) {
+                        respondRangeNotSatisfiable(output, 0)
+                        return
+                    }
+                    context.contentResolver.openInputStream(uri).use { input ->
+                        if (input == null) {
+                            throw FileNotFoundException("Document could not be opened")
+                        }
+                        respondBytes(output, HTTP_OK, contentType, input.readBytes())
+                    }
+                    return
+                }
+
+                val range =
+                    try {
+                        parseHttpRange(requestedRange, fileSize)
+                    } catch (_: IllegalArgumentException) {
+                        respondRangeNotSatisfiable(output, fileSize)
+                        return
+                    }
+
+                respondAssetFile(
+                    output = output,
+                    descriptor = descriptor,
+                    contentType = contentType,
+                    fileSize = fileSize,
+                    range = range,
+                    sendBody = request.method != "HEAD",
+                )
+            }
+        } catch (exception: FileNotFoundException) {
+            respondJson(output, HTTP_NOT_FOUND, JSONObject().put("ok", false).put("error", exception.message))
+        } catch (exception: SecurityException) {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", "Document access permission is missing"))
+        } catch (exception: IOException) {
+            respondJson(output, HTTP_INTERNAL_SERVER_ERROR, JSONObject().put("ok", false).put("error", exception.message))
+        }
     }
 
     private fun handleDocumentWrite(requestUri: Uri, request: HttpRequest, output: OutputStream) {
@@ -550,6 +881,9 @@ class LocalHttpServer(
                 if (ui.has("showExecutionLog")) {
                     uiSettings.put("showExecutionLog", ui.optBoolean("showExecutionLog"))
                 }
+                if (ui.has("showUpdates")) {
+                    uiSettings.put("showUpdates", ui.optBoolean("showUpdates"))
+                }
             }
             val legal = payload.optJSONObject("legal") ?: JSONObject()
             currentSettings.optJSONObject("legal")?.let { legalSettings ->
@@ -579,6 +913,24 @@ class LocalHttpServer(
             respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", exception.message))
         } catch (exception: IOException) {
             respondJson(output, HTTP_INTERNAL_SERVER_ERROR, JSONObject().put("ok", false).put("error", exception.message))
+        }
+    }
+
+    private fun handleClipboardWrite(request: HttpRequest, output: OutputStream) {
+        try {
+            val payload = parseJsonObject(request.body)
+            val text = UpdateManifestParser.normalizeOptionalString(payload.opt("text"))
+            if (text.isBlank()) {
+                throw IllegalArgumentException("Clipboard text is required")
+            }
+
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("FHPlayer diagnostics log", text))
+            respondJson(output, HTTP_OK, JSONObject().put("ok", true))
+        } catch (exception: IllegalArgumentException) {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", exception.message))
+        } catch (exception: JSONException) {
+            respondJson(output, HTTP_BAD_REQUEST, JSONObject().put("ok", false).put("error", exception.message))
         }
     }
 
@@ -978,12 +1330,215 @@ class LocalHttpServer(
         output.write(body)
     }
 
+    private fun respondFile(
+        output: OutputStream,
+        file: File,
+        contentType: String,
+        range: LongRange?,
+        sendBody: Boolean,
+    ) {
+        val fileSize = file.length()
+        val start = range?.first ?: 0L
+        val end = range?.last ?: if (fileSize > 0) fileSize - 1 else 0L
+        val contentLength = if (fileSize > 0) end - start + 1 else 0L
+        val statusCode = if (range != null) HTTP_PARTIAL_CONTENT else HTTP_OK
+        val headerText =
+            buildString {
+                append("HTTP/1.1 ")
+                append(statusCode)
+                append(' ')
+                append(statusMessage(statusCode))
+                append("\r\n")
+                append("Content-Type: ")
+                append(contentType)
+                append("\r\n")
+                append("Content-Length: ")
+                append(contentLength)
+                append("\r\n")
+                append("Accept-Ranges: bytes\r\n")
+                append("Cache-Control: no-store\r\n")
+                if (range != null) {
+                    append("Content-Range: bytes ")
+                    append(start)
+                    append('-')
+                    append(end)
+                    append('/')
+                    append(fileSize)
+                    append("\r\n")
+                }
+                append("Connection: close\r\n")
+                append("\r\n")
+            }
+        output.write(headerText.toByteArray(StandardCharsets.US_ASCII))
+
+        if (!sendBody || contentLength <= 0) {
+            return
+        }
+
+        RandomAccessFile(file, "r").use { randomAccessFile ->
+            randomAccessFile.seek(start)
+            val buffer = ByteArray(64 * 1024)
+            var remaining = contentLength
+            while (remaining > 0) {
+                val bytesRead = randomAccessFile.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                if (bytesRead <= 0) {
+                    break
+                }
+                output.write(buffer, 0, bytesRead)
+                remaining -= bytesRead.toLong()
+            }
+        }
+    }
+
+    private fun respondAssetFile(
+        output: OutputStream,
+        descriptor: android.content.res.AssetFileDescriptor,
+        contentType: String,
+        fileSize: Long,
+        range: LongRange?,
+        sendBody: Boolean,
+    ) {
+        val start = range?.first ?: 0L
+        val end = range?.last ?: if (fileSize > 0) fileSize - 1 else 0L
+        val contentLength = if (fileSize > 0) end - start + 1 else 0L
+        val statusCode = if (range != null) HTTP_PARTIAL_CONTENT else HTTP_OK
+        val headerText =
+            buildString {
+                append("HTTP/1.1 ")
+                append(statusCode)
+                append(' ')
+                append(statusMessage(statusCode))
+                append("\r\n")
+                append("Content-Type: ")
+                append(contentType)
+                append("\r\n")
+                append("Content-Length: ")
+                append(contentLength)
+                append("\r\n")
+                append("Accept-Ranges: bytes\r\n")
+                append("Cache-Control: no-store\r\n")
+                if (range != null) {
+                    append("Content-Range: bytes ")
+                    append(start)
+                    append('-')
+                    append(end)
+                    append('/')
+                    append(fileSize)
+                    append("\r\n")
+                }
+                append("Connection: close\r\n")
+                append("\r\n")
+            }
+        output.write(headerText.toByteArray(StandardCharsets.US_ASCII))
+
+        if (!sendBody || contentLength <= 0) {
+            return
+        }
+
+        FileInputStream(descriptor.fileDescriptor).use { input ->
+            skipFully(input, descriptor.startOffset + start)
+            val buffer = ByteArray(64 * 1024)
+            var remaining = contentLength
+            while (remaining > 0) {
+                val bytesRead = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                if (bytesRead <= 0) {
+                    break
+                }
+                output.write(buffer, 0, bytesRead)
+                remaining -= bytesRead.toLong()
+            }
+        }
+    }
+
+    @Throws(IOException::class)
+    private fun skipFully(input: InputStream, bytesToSkip: Long) {
+        var remaining = bytesToSkip
+        while (remaining > 0) {
+            val skipped = input.skip(remaining)
+            if (skipped > 0) {
+                remaining -= skipped
+                continue
+            }
+            if (input.read() == -1) {
+                throw EOFException("Unexpected end of document stream.")
+            }
+            remaining -= 1
+        }
+    }
+
+    private fun respondRangeNotSatisfiable(output: OutputStream, fileSize: Long) {
+        val headerText =
+            buildString {
+                append("HTTP/1.1 ")
+                append(HTTP_RANGE_NOT_SATISFIABLE)
+                append(' ')
+                append(statusMessage(HTTP_RANGE_NOT_SATISFIABLE))
+                append("\r\n")
+                append("Content-Range: bytes */")
+                append(fileSize)
+                append("\r\n")
+                append("Content-Length: 0\r\n")
+                append("Accept-Ranges: bytes\r\n")
+                append("Cache-Control: no-store\r\n")
+                append("Connection: close\r\n")
+                append("\r\n")
+            }
+        output.write(headerText.toByteArray(StandardCharsets.US_ASCII))
+    }
+
+    private fun parseHttpRange(rangeHeader: String, fileSize: Long): LongRange? {
+        val normalizedHeader = rangeHeader.trim()
+        if (normalizedHeader.isBlank()) {
+            return null
+        }
+        val match = Regex("""bytes=(\d*)-(\d*)""").matchEntire(normalizedHeader)
+            ?: throw IllegalArgumentException("Invalid Range header")
+        if (fileSize <= 0) {
+            throw IllegalArgumentException("Invalid Range header")
+        }
+
+        val startText = match.groupValues[1]
+        val endText = match.groupValues[2]
+        if (startText.isBlank() && endText.isBlank()) {
+            throw IllegalArgumentException("Invalid Range header")
+        }
+
+        val start: Long
+        val end: Long
+        if (startText.isBlank()) {
+            val suffixLength = endText.toLongOrNull() ?: throw IllegalArgumentException("Invalid Range header")
+            if (suffixLength <= 0) {
+                throw IllegalArgumentException("Invalid Range header")
+            }
+            start = (fileSize - suffixLength).coerceAtLeast(0)
+            end = fileSize - 1
+        } else {
+            start = startText.toLongOrNull() ?: throw IllegalArgumentException("Invalid Range header")
+            end = if (endText.isBlank()) {
+                fileSize - 1
+            } else {
+                endText.toLongOrNull() ?: throw IllegalArgumentException("Invalid Range header")
+            }
+        }
+
+        val normalizedEnd = end.coerceAtMost(fileSize - 1)
+        if (start < 0 || start >= fileSize || normalizedEnd < start) {
+            throw IllegalArgumentException("Invalid Range header")
+        }
+        return start..normalizedEnd
+    }
+
     private fun guessContentType(path: String): String {
         return when {
             path.endsWith(".html") -> "text/html; charset=utf-8"
             path.endsWith(".js") -> "application/javascript; charset=utf-8"
             path.endsWith(".css") -> "text/css; charset=utf-8"
             path.endsWith(".json") -> "application/json; charset=utf-8"
+            path.endsWith(".funscript") -> "application/json; charset=utf-8"
+            path.endsWith(".mp4") -> "video/mp4"
+            path.endsWith(".webm") -> "video/webm"
+            path.endsWith(".m4v") -> "video/mp4"
+            path.endsWith(".mov") -> "video/quicktime"
             path.endsWith(".svg") -> "image/svg+xml"
             path.endsWith(".png") -> "image/png"
             path.endsWith(".jpg") || path.endsWith(".jpeg") -> "image/jpeg"
@@ -994,11 +1549,13 @@ class LocalHttpServer(
     private fun statusMessage(statusCode: Int): String {
         return when (statusCode) {
             HTTP_OK -> "OK"
+            HTTP_PARTIAL_CONTENT -> "Partial Content"
             HTTP_BAD_REQUEST -> "Bad Request"
             HTTP_NOT_FOUND -> "Not Found"
             HTTP_BAD_GATEWAY -> "Bad Gateway"
             HTTP_GATEWAY_TIMEOUT -> "Gateway Timeout"
             HTTP_NOT_IMPLEMENTED -> "Not Implemented"
+            HTTP_RANGE_NOT_SATISFIABLE -> "Range Not Satisfiable"
             else -> "Internal Server Error"
         }
     }
@@ -1126,7 +1683,9 @@ class LocalHttpServer(
                 "capabilities",
                 JSONObject()
                     .put("import", true)
-                    .put("reveal", false),
+                    .put("reveal", false)
+                    .put("serve", true)
+                    .put("delete", true),
             )
     }
 
@@ -1165,8 +1724,10 @@ class LocalHttpServer(
         private const val HOST = "127.0.0.1"
         private const val PORT = 8765
         private const val HTTP_OK = 200
+        private const val HTTP_PARTIAL_CONTENT = 206
         private const val HTTP_BAD_REQUEST = 400
         private const val HTTP_NOT_FOUND = 404
+        private const val HTTP_RANGE_NOT_SATISFIABLE = 416
         private const val HTTP_INTERNAL_SERVER_ERROR = 500
         private const val HTTP_BAD_GATEWAY = 502
         private const val HTTP_GATEWAY_TIMEOUT = 504

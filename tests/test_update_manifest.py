@@ -26,7 +26,7 @@ class UpdateManifestTests(unittest.TestCase):
             payload = case["payload"]
             for platform, expected in case["expected"].items():
                 with self.subTest(case=case["name"], platform=platform):
-                    result = app.parse_release_payload(payload, platform)
+                    result = app.parse_release_payload(payload, platform, case["current_version"])
                     self.assertEqual(result["status"], expected["status"])
                     self.assertEqual(result["latestVersion"], expected["latestVersion"])
                     self.assertEqual(result["updateAvailable"], expected["updateAvailable"])

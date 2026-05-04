@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import ipaddress
 import logging
@@ -67,6 +68,8 @@ LIBRARY_DIRECTORIES = {
     "export": LIBRARY_ROOT / "Exports",
     "exports": LIBRARY_ROOT / "Exports",
 }
+VIDEO_FILE_EXTENSIONS = {".mp4", ".webm", ".m4v", ".mov", ".mkv", ".avi"}
+FUNSCRIPT_FILE_EXTENSIONS = {".funscript", ".json"}
 LOGGER = logging.getLogger("fhplayer")
 
 
@@ -118,6 +121,7 @@ def normalize_settings(payload: Any) -> dict[str, Any]:
             "showDiagnostics": bool(ui_payload.get("showDiagnostics", True)),
             "showFunscriptOverview": bool(ui_payload.get("showFunscriptOverview", True)),
             "showExecutionLog": bool(ui_payload.get("showExecutionLog", True)),
+            "showUpdates": bool(ui_payload.get("showUpdates", True)),
         },
         "legal": {
             "lastAcknowledgedVersion": normalize_optional_string(legal_payload.get("lastAcknowledgedVersion")),
@@ -276,11 +280,12 @@ def select_release_asset(assets: Any, platform: str) -> tuple[str, str]:
     return "", ""
 
 
-def parse_release_payload(payload: Any, platform: str) -> dict[str, Any]:
+def parse_release_payload(payload: Any, platform: str, current_version: str | None = None) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Update feed returned an invalid JSON payload")
 
     require_manifest_schema_version(payload)
+    normalized_current_version = normalize_optional_string(current_version) or APP_VERSION
     normalized_platform = normalize_update_platform(platform)
     platform_payload = extract_platform_payload(payload, normalized_platform)
     latest_version = first_non_blank(
@@ -306,7 +311,7 @@ def parse_release_payload(payload: Any, platform: str) -> dict[str, Any]:
     if not download_url:
         download_url, asset_name = select_release_asset(payload.get("assets"), normalized_platform)
 
-    current_version_parts = parse_version_parts(APP_VERSION) or (0, 0, 0)
+    current_version_parts = parse_version_parts(normalized_current_version) or (0, 0, 0)
     normalized_latest_version = ".".join(str(part) for part in latest_version_parts)
     update_available = latest_version_parts > current_version_parts
     status = "available" if update_available else "current"
@@ -318,7 +323,7 @@ def parse_release_payload(payload: Any, platform: str) -> dict[str, Any]:
     return {
         "status": status,
         "checkedAt": utc_now_iso(),
-        "currentVersion": APP_VERSION,
+        "currentVersion": normalized_current_version,
         "latestVersion": normalized_latest_version,
         "updateAvailable": update_available,
         "releaseUrl": release_url,
@@ -331,7 +336,7 @@ def parse_release_payload(payload: Any, platform: str) -> dict[str, Any]:
         "message": (
             f"Version {normalized_latest_version} is available."
             if update_available
-            else f"You are already on the latest version ({APP_VERSION})."
+            else f"You are already on the latest version ({normalized_current_version})."
         ),
     }
 
@@ -485,18 +490,129 @@ def build_library_payload() -> dict[str, Any]:
         "capabilities": {
             "import": True,
             "reveal": True,
+            "serve": True,
+            "localFiles": True,
+            "delete": True,
         },
     }
 
 
-def open_in_file_manager(path: Path) -> None:
+def build_library_file_list(kind: str) -> dict[str, Any]:
+    target_directory = resolve_library_directory(kind)
+    files: list[dict[str, Any]] = []
+    for target_file in sorted(target_directory.iterdir(), key=lambda path: path.name.lower()):
+        if not target_file.is_file():
+            continue
+        stat = target_file.stat()
+        files.append(
+            {
+                "name": target_file.name,
+                "path": str(target_file),
+                "sizeBytes": stat.st_size,
+                "modifiedMs": int(stat.st_mtime * 1000),
+            }
+        )
+    return {
+        "ok": True,
+        "kind": str(kind or "").strip().lower(),
+        "files": files,
+    }
+
+
+def resolve_library_file(kind: str, file_name: str) -> Path:
+    target_directory = resolve_library_directory(kind)
+    safe_file_name = sanitize_library_filename(file_name)
+    target_file = target_directory / safe_file_name
+    if not target_file.is_file():
+        raise FileNotFoundError(f"Library file was not found: {safe_file_name}")
+    return target_file
+
+
+def resolve_local_media_file(kind: str, file_path: str) -> Path:
+    normalized_kind = str(kind or "").strip().lower()
+    allowed_extensions = {
+        "video": VIDEO_FILE_EXTENSIONS,
+        "videos": VIDEO_FILE_EXTENSIONS,
+        "funscript": FUNSCRIPT_FILE_EXTENSIONS,
+        "funscripts": FUNSCRIPT_FILE_EXTENSIONS,
+    }.get(normalized_kind)
+    if allowed_extensions is None:
+        raise ValueError("Unsupported local file kind")
+
+    normalized_path = normalize_optional_string(file_path)
+    if not normalized_path:
+        raise ValueError("A local file path is required")
+
+    target_file = Path(normalized_path).expanduser()
+    if not target_file.is_absolute():
+        raise ValueError("Local file path must be absolute")
+    if target_file.suffix.lower() not in allowed_extensions:
+        raise ValueError("Unsupported local file extension")
+    if not target_file.is_file():
+        raise FileNotFoundError(f"Local file was not found: {target_file}")
+    return target_file
+
+
+def parse_http_range(range_header: str, file_size: int) -> tuple[int, int] | None:
+    normalized_header = str(range_header or "").strip()
+    if not normalized_header:
+        return None
+
+    match = re.fullmatch(r"bytes=(\d*)-(\d*)", normalized_header)
+    if not match or file_size <= 0:
+        raise ValueError("Invalid Range header")
+
+    start_text, end_text = match.groups()
+    if not start_text and not end_text:
+        raise ValueError("Invalid Range header")
+
+    if not start_text:
+        suffix_length = int(end_text)
+        if suffix_length <= 0:
+            raise ValueError("Invalid Range header")
+        start = max(0, file_size - suffix_length)
+        end = file_size - 1
+    else:
+        start = int(start_text)
+        end = int(end_text) if end_text else file_size - 1
+
+    end = min(end, file_size - 1)
+    if start < 0 or start >= file_size or end < start:
+        raise ValueError("Invalid Range header")
+    return start, end
+
+
+def open_in_file_manager(path: Path) -> str:
+    resolved_path = path.resolve()
+    resolved_path.mkdir(parents=True, exist_ok=True)
     if sys.platform == "win32":
-        os.startfile(str(path))  # type: ignore[attr-defined]
-        return
+        startfile = getattr(os, "startfile", None)
+        if startfile is not None:
+            try:
+                startfile(str(resolved_path))
+                return "os.startfile"
+            except OSError:
+                LOGGER.warning("os.startfile failed for %s; trying explorer.exe fallback.", resolved_path, exc_info=True)
+
+        explorer_path = Path(os.environ.get("WINDIR", r"C:\Windows")) / "explorer.exe"
+        explorer_command = str(explorer_path) if explorer_path.exists() else "explorer.exe"
+        process = subprocess.Popen(
+            [explorer_command, str(resolved_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            return_code = process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            return "explorer.exe"
+        if return_code != 0:
+            raise OSError(f"explorer.exe exited with status {return_code}")
+        return "explorer.exe"
     if sys.platform == "darwin":
-        subprocess.Popen(["open", str(path)])
-        return
-    subprocess.Popen(["xdg-open", str(path)])
+        subprocess.Popen(["open", str(resolved_path)])
+        return "open"
+    subprocess.Popen(["xdg-open", str(resolved_path)])
+    return "xdg-open"
 
 def parse_json_body(handler: SimpleHTTPRequestHandler) -> dict[str, Any]:
     try:
@@ -711,6 +827,15 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/library/info":
             self._send_json(build_library_payload())
             return
+        if parsed.path == "/api/library/list":
+            self._handle_library_list(parsed)
+            return
+        if parsed.path == "/api/library/file":
+            self._handle_library_file(parsed)
+            return
+        if parsed.path == "/api/local-file":
+            self._handle_local_file(parsed)
+            return
         if parsed.path == "/api/settings":
             self._send_json(build_settings_payload())
             return
@@ -722,6 +847,16 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
             self.path = "/index.html"
 
         super().do_GET()
+
+    def do_HEAD(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/api/library/file":
+            self._handle_library_file(parsed, send_body=False)
+            return
+        if parsed.path == "/api/local-file":
+            self._handle_local_file(parsed, send_body=False)
+            return
+        super().do_HEAD()
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
@@ -754,6 +889,14 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
         route = parsed.path.rstrip("/") or "/"
         if route == "/api/library/import":
             self._handle_library_import(parsed)
+            return
+        self.send_error(HTTPStatus.NOT_FOUND, "Unknown API route")
+
+    def do_DELETE(self) -> None:
+        parsed = urlparse(self.path)
+        route = parsed.path.rstrip("/") or "/"
+        if route == "/api/library/file":
+            self._handle_library_delete(parsed)
             return
         self.send_error(HTTPStatus.NOT_FOUND, "Unknown API route")
 
@@ -820,6 +963,15 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
 
         self._send_json({"ok": True, "results": results})
 
+    def _handle_library_list(self, parsed: Any) -> None:
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            self._send_json(build_library_file_list(query.get("kind", [""])[0]))
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except OSError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
     def _handle_library_import(self, parsed: Any) -> None:
         query = parse_qs(parsed.query, keep_blank_values=True)
         try:
@@ -852,29 +1004,182 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
         )
         LOGGER.info("Imported %s into %s", destination.name, target_directory)
 
-    def _handle_library_open(self, parsed: Any) -> None:
+    def _handle_library_delete(self, parsed: Any) -> None:
         query = parse_qs(parsed.query, keep_blank_values=True)
         try:
-            target_directory = resolve_library_directory(query.get("kind", ["videos"])[0])
-            open_in_file_manager(target_directory)
+            target_file = resolve_library_file(query.get("kind", [""])[0], query.get("filename", [""])[0])
+            file_size = target_file.stat().st_size
         except ValueError as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except FileNotFoundError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.NOT_FOUND)
             return
         except OSError as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
-        self._send_json({"ok": True, "path": str(target_directory)})
+        try:
+            target_file.unlink()
+        except OSError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self._send_json(
+            {
+                "ok": True,
+                "path": str(target_file),
+                "fileName": target_file.name,
+                "sizeBytes": file_size,
+            }
+        )
+        LOGGER.info("Deleted library file %s", target_file)
+
+    def _handle_library_file(self, parsed: Any, send_body: bool = True) -> None:
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            target_file = resolve_library_file(query.get("kind", [""])[0], query.get("filename", [""])[0])
+            file_size = target_file.stat().st_size
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except FileNotFoundError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+        except OSError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        requested_range = bool(self.headers.get("Range"))
+        try:
+            byte_range = parse_http_range(self.headers.get("Range", ""), file_size) if requested_range else None
+        except ValueError:
+            self._send_range_not_satisfiable(file_size)
+            return
+
+        start, end = byte_range if byte_range else (0, max(file_size - 1, 0))
+        content_length = 0 if file_size == 0 else end - start + 1
+        content_type = self._guess_library_content_type(target_file)
+        status = HTTPStatus.PARTIAL_CONTENT if byte_range else HTTPStatus.OK
+
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        if byte_range:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+        self.end_headers()
+
+        if not send_body or content_length <= 0:
+            return
+
+        try:
+            with target_file.open("rb") as file_handle:
+                file_handle.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk = file_handle.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            LOGGER.debug("Client closed library file stream early: %s", target_file)
+        except OSError:
+            LOGGER.exception("Could not stream library file %s.", target_file)
+
+    def _handle_local_file(self, parsed: Any, send_body: bool = True) -> None:
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            target_file = resolve_local_media_file(query.get("kind", [""])[0], query.get("path", [""])[0])
+            file_size = target_file.stat().st_size
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except FileNotFoundError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+            return
+        except OSError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        requested_range = bool(self.headers.get("Range"))
+        try:
+            byte_range = parse_http_range(self.headers.get("Range", ""), file_size) if requested_range else None
+        except ValueError:
+            self._send_range_not_satisfiable(file_size)
+            return
+
+        start, end = byte_range if byte_range else (0, max(file_size - 1, 0))
+        content_length = 0 if file_size == 0 else end - start + 1
+        content_type = self._guess_library_content_type(target_file)
+        status = HTTPStatus.PARTIAL_CONTENT if byte_range else HTTPStatus.OK
+
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(content_length))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        if byte_range:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+        self.end_headers()
+
+        if not send_body or content_length <= 0:
+            return
+
+        try:
+            with target_file.open("rb") as file_handle:
+                file_handle.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk = file_handle.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+            LOGGER.debug("Client closed local file stream early: %s", target_file)
+        except OSError:
+            LOGGER.exception("Could not stream local file %s.", target_file)
+
+    def _send_range_not_satisfiable(self, file_size: int) -> None:
+        self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+        self.send_header("Content-Range", f"bytes */{file_size}")
+        self.send_header("Content-Length", "0")
+        self.send_header("Accept-Ranges", "bytes")
+        self.end_headers()
+
+    def _guess_library_content_type(self, target_file: Path) -> str:
+        if target_file.suffix.lower() in {".funscript", ".json"}:
+            return "application/json; charset=utf-8"
+        return mimetypes.guess_type(target_file.name)[0] or "application/octet-stream"
+
+    def _handle_library_open(self, parsed: Any) -> None:
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        try:
+            target_directory = resolve_library_directory(query.get("kind", ["videos"])[0])
+            LOGGER.info("Opening library folder: %s", target_directory)
+            opener = open_in_file_manager(target_directory)
+        except ValueError as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            return
+        except OSError as exc:
+            LOGGER.exception("Could not open library folder: %s", query.get("kind", ["videos"])[0])
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        self._send_json({"ok": True, "path": str(target_directory), "opener": opener})
 
     def _handle_diagnostics_open(self) -> None:
         try:
-            open_in_file_manager(LOGS_DIR)
+            opener = open_in_file_manager(LOGS_DIR)
         except OSError as exc:
             LOGGER.exception("Could not open diagnostics folder.")
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
-        self._send_json({"ok": True, "path": str(LOGS_DIR)})
+        self._send_json({"ok": True, "path": str(LOGS_DIR), "opener": opener})
 
     def _handle_settings_update(self) -> None:
         try:
@@ -904,6 +1209,8 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
                 current_settings["ui"]["showFunscriptOverview"] = bool(ui_payload.get("showFunscriptOverview"))
             if "showExecutionLog" in ui_payload:
                 current_settings["ui"]["showExecutionLog"] = bool(ui_payload.get("showExecutionLog"))
+            if "showUpdates" in ui_payload:
+                current_settings["ui"]["showUpdates"] = bool(ui_payload.get("showUpdates"))
         legal_payload = payload.get("legal", {}) if isinstance(payload, dict) else {}
         if isinstance(legal_payload, dict) and "lastAcknowledgedVersion" in legal_payload:
             current_settings["legal"]["lastAcknowledgedVersion"] = normalize_optional_string(
