@@ -28,6 +28,7 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.URL
+import java.security.cert.CertificateException
 import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.Locale
@@ -1057,7 +1058,7 @@ class LocalHttpServer(
 
         if (connection is HttpsURLConnection && shouldUseUnsafeLovenseTls(parsedUrl)) {
             connection.sslSocketFactory = unsafeSslSocketFactory
-            connection.hostnameVerifier = unsafeHostnameVerifier
+            connection.hostnameVerifier = localLovenseHostnameVerifier
         }
 
         connection.outputStream.use { stream ->
@@ -1081,22 +1082,7 @@ class LocalHttpServer(
     }
 
     private fun shouldUseUnsafeLovenseTls(url: URL): Boolean {
-        if (!url.protocol.equals("https", ignoreCase = true)) {
-            return false
-        }
-
-        val host = url.host?.trim().orEmpty()
-        if (host.isEmpty()) {
-            return false
-        }
-
-        val directIpv4 = host.split('.')
-        if (directIpv4.size != 4 || directIpv4.any { part -> part.toIntOrNull() !in 0..255 }) {
-            return false
-        }
-
-        val address = InetAddress.getByName(host)
-        return address.hostAddress == host && (address.isSiteLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress)
+        return url.protocol.equals("https", ignoreCase = true) && isLocalLovenseTlsHost(url.host)
     }
 
     @Throws(IOException::class)
@@ -1768,13 +1754,22 @@ class LocalHttpServer(
         private const val RELEASE_PAGE_URL = "https://github.com/Honaro19/FHPlayer/releases"
         private val UPDATE_FEED_URL = BuildConfig.FHPLAYER_UPDATE_FEED_URL.ifBlank { DEFAULT_UPDATE_FEED_URL }
 
-        private val unsafeHostnameVerifier = HostnameVerifier { _, _ -> true }
+        private val localLovenseHostnameVerifier = HostnameVerifier { hostname, _ ->
+            isLocalLovenseTlsHost(hostname)
+        }
 
         private val unsafeSslSocketFactory: SSLSocketFactory by lazy {
             val trustManager = object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {
+                    throw CertificateException("Client certificates are not supported")
+                }
 
-                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
+                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {
+                    val certificates = chain?.toList().orEmpty()
+                    if (certificates.isEmpty()) {
+                        throw CertificateException("Server certificate chain is empty")
+                    }
+                }
 
                 override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = emptyArray()
             }
@@ -1782,6 +1777,24 @@ class LocalHttpServer(
             val context = SSLContext.getInstance("TLS")
             context.init(null, arrayOf<TrustManager>(trustManager), java.security.SecureRandom())
             context.socketFactory
+        }
+
+        private fun isLocalLovenseTlsHost(host: String?): Boolean {
+            val normalizedHost = host?.trim().orEmpty()
+            if (normalizedHost.isEmpty()) {
+                return false
+            }
+
+            return try {
+                val address = InetAddress.getByName(normalizedHost)
+                address.hostAddress == normalizedHost && (
+                    address.isSiteLocalAddress ||
+                        address.isLoopbackAddress ||
+                        address.isLinkLocalAddress
+                    )
+            } catch (_: Exception) {
+                false
+            }
         }
 
         fun baseUrl(): String = "http://$HOST:$PORT"
