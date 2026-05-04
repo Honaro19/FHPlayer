@@ -45,6 +45,27 @@ jobs:
           java-version: "17"
           cache: gradle
 
+      - name: Locate Gradle wrapper
+        if: matrix.language == 'java-kotlin'
+        id: gradle
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Searching for Gradle wrapper..."
+          find . -maxdepth 5 -type f \( -name gradlew -o -name settings.gradle -o -name settings.gradle.kts -o -name build.gradle -o -name build.gradle.kts \) -print
+
+          GRADLEW_PATH="$(find . -maxdepth 5 -type f -name gradlew | head -n 1 || true)"
+
+          if [ -z "$GRADLEW_PATH" ]; then
+            echo "No Gradle wrapper found. Please commit a gradlew file or adjust the CodeQL build step to your real Android project path."
+            exit 1
+          fi
+
+          GRADLE_DIR="$(dirname "$GRADLEW_PATH")"
+          echo "Found Gradle wrapper at: $GRADLEW_PATH"
+          echo "gradle-dir=$GRADLE_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
@@ -54,14 +75,13 @@ jobs:
 
       - name: Make Gradle wrapper executable
         if: matrix.language == 'java-kotlin'
-        working-directory: FHPlayerMobile/android
         shell: bash
-        run: chmod +x ./gradlew
+        run: chmod +x "${{ steps.gradle.outputs.gradle-dir }}/gradlew"
 
       - name: Build Android project for CodeQL
         if: matrix.language == 'java-kotlin'
-        working-directory: FHPlayerMobile/android
         shell: bash
+        working-directory: ${{ steps.gradle.outputs.gradle-dir }}
         run: ./gradlew assembleDebug --no-daemon
 
       - name: Perform CodeQL Analysis
