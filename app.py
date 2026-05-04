@@ -1,4 +1,5 @@
 from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import json
 import mimetypes
@@ -760,8 +761,36 @@ def build_lovense_request_candidates(config: dict[str, Any]) -> list[tuple[str, 
 
     return candidates
 
+def validate_lovense_url(url: str) -> None:
+    parsed = urlparse(str(url or "").strip())
+
+    # Nur HTTP/HTTPS erlauben
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Invalid URL scheme")
+
+    host = (parsed.hostname or "").strip()
+    if not host:
+        raise ValueError("Invalid URL host")
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        # Domain → optional einschränken
+        if not host.endswith(".lovense.club"):
+            raise ValueError("Only Lovense domains are allowed")
+        return
+
+    # IP → nur bestimmte erlauben
+    if not (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+    ):
+        raise ValueError("Public IPs are not allowed for Lovense requests")
 
 def execute_lovense_request(url: str, platform_name: str, payload: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
+    validate_lovense_url(url)
+
     request = urlrequest.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -772,8 +801,7 @@ def execute_lovense_request(url: str, platform_name: str, payload: dict[str, Any
         method="POST",
     )
 
-    context = ssl._create_unverified_context() if should_use_unverified_lovense_tls(url) else None
-    with urlrequest.urlopen(request, timeout=timeout_seconds, context=context) as response:
+    with urlrequest.urlopen(request, timeout=timeout_seconds) as response:
         body = response.read().decode("utf-8")
 
     return json.loads(body)
@@ -807,27 +835,55 @@ def lovense_request(
 ) -> tuple[dict[str, Any], str]:
     platform_name = str(config.get("platformName", "FHPlayer")).strip() or "FHPlayer"
     candidates = build_lovense_request_candidates(config)
+
+    if not candidates:
+        raise RuntimeError("No Lovense request candidates were generated")
+
+    def try_candidate(candidate: tuple[str, str, str]) -> tuple[dict[str, Any], str]:
+        scheme, host, port = candidate
+        url = f"{scheme}://{host}:{port}/command"
+        result = execute_lovense_request(url, platform_name, payload, timeout_seconds)
+        return result, url
+
     errors: list[str] = []
     last_error: Exception | None = None
 
-    for scheme, host, port in candidates:
-        url = f"{scheme}://{host}:{port}/command"
-        try:
-            return execute_lovense_request(url, platform_name, payload, timeout_seconds), url
-        except Exception as exc:
-            last_error = exc
-            errors.append(f"{url}: {exc}")
+    max_workers = min(len(candidates), 8)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_candidate = {
+            executor.submit(try_candidate, candidate): candidate
+            for candidate in candidates
+        }
+
+        for future in as_completed(future_to_candidate):
+            scheme, host, port = future_to_candidate[future]
+            url = f"{scheme}://{host}:{port}/command"
+
+            try:
+                return future.result()
+            except Exception as exc:
+                last_error = exc
+                errors.append(f"{url}: {exc}")
 
     if last_error is None:
         raise RuntimeError("No Lovense request candidates were generated")
 
     error_summary = " | ".join(errors[-4:])
+    error_text = str(last_error).lower()
+
+    if any(keyword in error_text for keyword in ["10061", "connection refused", "getaddrinfo", "failed to establish"]):
+        raise RuntimeError(
+            "No Lovense device or app reachable. Please start the Lovense app and try again."
+        ) from last_error
+
     if isinstance(last_error, TimeoutError):
         raise TimeoutError(f"{last_error}. Tried: {error_summary}") from last_error
+
     if isinstance(last_error, urlerror.URLError):
         raise urlerror.URLError(f"{last_error}. Tried: {error_summary}")
-    raise RuntimeError(f"{last_error}. Tried: {error_summary}") from last_error
 
+    raise RuntimeError(f"{last_error}. Tried: {error_summary}") from last_error
 
 class FHPlayerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
