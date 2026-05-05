@@ -85,7 +85,9 @@ class MainActivity : ComponentActivity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             allowFileAccess = false
-            allowContentAccess = true
+            // Prevent WebView JavaScript from loading content:// URLs directly.
+            // Android file/document selection still works through the native file chooser callback.
+            allowContentAccess = false
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
