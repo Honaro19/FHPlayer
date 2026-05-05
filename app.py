@@ -8,7 +8,6 @@ import ipaddress
 import logging
 from logging.handlers import RotatingFileHandler
 import re
-import ssl
 import subprocess
 import sys
 import webbrowser
@@ -885,6 +884,10 @@ def lovense_request(
 
     raise RuntimeError(f"{last_error}. Tried: {error_summary}") from last_error
 
+def sanitize_for_log(value: object) -> str:
+        text = str(value)
+        return text.replace("\r", "\\r").replace("\n", "\\n")
+
 class FHPlayerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
@@ -1243,10 +1246,6 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
             return "application/json; charset=utf-8"
         return mimetypes.guess_type(target_file.name)[0] or "application/octet-stream"
 
-    def sanitize_for_log(value: object) -> str:
-        text = str(value)
-        return text.replace("\r", "\\r").replace("\n", "\\n")
-
     def _handle_library_open(self, parsed: Any) -> None:
         query = parse_qs(parsed.query, keep_blank_values=True)
         try:
@@ -1409,7 +1408,7 @@ def main() -> None:
             error_log.write_text(error_msg)
             print(f"Error log written to {error_log}", flush=True)
         except Exception:
-            pass
+            print(f"Could not write error log: {exc}", flush=True)
 
         if sys.platform == "win32":
             import time
