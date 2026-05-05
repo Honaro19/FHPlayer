@@ -94,7 +94,7 @@ jobs:
     # Android builds require an Android SDK on the runner.
     - name: Set up Android SDK for Android/Kotlin
       if: matrix.language == 'java-kotlin'
-      uses: android-actions/setup-android@9fc6c4e72b4b8a8b1f0b8f1a9a7f0c0a6a4a6d11 # v3.2.2
+      uses: android-actions/setup-android@v3
 
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
