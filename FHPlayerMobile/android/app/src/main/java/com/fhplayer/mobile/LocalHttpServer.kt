@@ -1360,7 +1360,7 @@ class LocalHttpServer(
     }
 
     private fun StringBuilder.appendSecurityHeaders() {
-        append("Content-Security-Policy: ")
+        append("Content-Security-Policy-Report-Only: ")
         append(contentSecurityPolicy())
         append("\r\n")
         append("X-Content-Type-Options: nosniff\r\n")
