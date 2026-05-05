@@ -1243,6 +1243,10 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
             return "application/json; charset=utf-8"
         return mimetypes.guess_type(target_file.name)[0] or "application/octet-stream"
 
+    def sanitize_for_log(value: object) -> str:
+        text = str(value)
+        return text.replace("\r", "\\r").replace("\n", "\\n")
+
     def _handle_library_open(self, parsed: Any) -> None:
         query = parse_qs(parsed.query, keep_blank_values=True)
         try:
@@ -1253,7 +1257,8 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
         except OSError as exc:
-            LOGGER.exception("Could not open library folder: %s", query.get("kind", ["videos"])[0])
+            requested_kind = sanitize_for_log(query.get("kind", ["videos"])[0])
+            LOGGER.exception("Could not open library folder: %s", requested_kind)
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
