@@ -989,6 +989,8 @@ class LocalHttpServer(
             val url = "$scheme://$hostValue:$portValue/command"
             try {
                 return executeLovenseRequest(url, platformName, payload, timeoutMs) to url
+            } catch (exception: IllegalArgumentException) {
+                throw exception
             } catch (exception: Exception) {
                 lastError = exception
                 errors += "$url: ${exception.message ?: exception.javaClass.simpleName}"
@@ -1046,6 +1048,11 @@ class LocalHttpServer(
 
     private fun executeLovenseRequest(url: String, platformName: String, payload: JSONObject, timeoutMs: Int): JSONObject {
         val parsedUrl = URL(url)
+        validateLovenseRequestUrl(parsedUrl)
+
+        // Certificate pinning is intentionally not applied here: Lovense endpoints are local,
+        // user/device-specific, and may use dynamically generated hostnames or certificates.
+        // The request is restricted to local Lovense endpoints before opening the connection.
         val connection = (parsedUrl.openConnection() as HttpURLConnection).apply {
             connectTimeout = timeoutMs
             readTimeout = timeoutMs
@@ -1083,6 +1090,38 @@ class LocalHttpServer(
 
     private fun shouldUseUnsafeLovenseTls(url: URL): Boolean {
         return url.protocol.equals("https", ignoreCase = true) && isLocalLovenseTlsHost(url.host)
+    }
+
+    private fun validateLovenseRequestUrl(url: URL) {
+        val protocol = url.protocol.trim().lowercase(Locale.US)
+        if (protocol != "http" && protocol != "https") {
+            throw IllegalArgumentException("Lovense scheme must be http or https")
+        }
+
+        val hostValue = url.host?.trim()?.lowercase(Locale.US).orEmpty()
+        if (hostValue.isBlank()) {
+            throw IllegalArgumentException("Lovense host is required")
+        }
+
+        val portValue = if (url.port == -1) url.defaultPort else url.port
+        if (portValue !in 1..65535) {
+            throw IllegalArgumentException("Lovense port is invalid")
+        }
+
+        if (hostValue == "localhost") {
+            return
+        }
+
+        val embeddedIpv4 = extractLovenseIpv4(hostValue)
+        if (embeddedIpv4 != null && isLocalLovenseTlsHost(embeddedIpv4)) {
+            return
+        }
+
+        if (isLocalLovenseTlsHost(hostValue)) {
+            return
+        }
+
+        throw IllegalArgumentException("Lovense requests are restricted to local device endpoints")
     }
 
     @Throws(IOException::class)
