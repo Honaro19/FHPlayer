@@ -1,31 +1,31 @@
 {
-    "schema_version":  1,
-    "app":  "FHPlayer",
-    "latest_version":  "0.1.2",
-    "release_notes":  [
-                          "Added Library playlist saving with editable names and automatic replacement of renamed Library playlists.",
-                          "Moved playlist actions into the Playlist area and added Library delete flows for videos, funscripts, and playlists.",
-                          "Improved loading saved playlists when referenced video or funscript paths are missing.",
-                          "Fixed Android Library playlist loading crashes caused by interrupted local file streams."
-                      ],
-    "platforms":  {
-                      "windows":  {
-                                      "folder_url":  "https://github.com/Honaro19/FHPlayer/releases",
-                                      "installer_url":  "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2-Setup.exe",
-                                      "portable_url":  "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-Portable-0.1.2.zip",
-                                      "sha256":  {
-                                                     "installer":  "93387586abaa593e560ddfd34d527493e60d2b6d410b98d14347aa1b5a5f83f8",
-                                                     "portable":  "79fe3c91929e11c23fd2e8a4e7f0dc98afc3398b2943fcf66abe6bea7ac9d2bf"
-                                                 }
-                                  },
-                      "android":  {
-                                      "folder_url":  "https://github.com/Honaro19/FHPlayer/releases",
-                                      "apk_url":  "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2.apk",
-                                      "aab_url":  "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2.aab",
-                                      "sha256":  {
-                                                     "apk":  "fbe16528c09e376b6c76beb5ebfdeca132007b123562730704e0586f7e12e922",
-                                                     "aab":  "8c1710983399f20d75191f337ed71624925117516d7c72a2c1d0746894077479"
-                                                 }
-                                  }
-                  }
+  "schema_version": 1,
+  "app": "FHPlayer",
+  "latest_version": "0.1.2",
+  "release_notes": [
+    "Added Library playlist saving with editable names and automatic replacement of renamed Library playlists.",
+    "Moved playlist actions into the Playlist area and added Library delete flows for videos, funscripts, and playlists.",
+    "Improved loading saved playlists when referenced video or funscript paths are missing.",
+    "Fixed Android Library playlist loading crashes caused by interrupted local file streams."
+  ],
+  "platforms": {
+    "windows": {
+      "folder_url": "https://github.com/Honaro19/FHPlayer/releases",
+      "installer_url": "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2-Setup.exe",
+      "portable_url": "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-Portable-0.1.2.zip",
+      "sha256": {
+        "installer": "3eb4c440fe3c4a163b72f357391d112d9eeb5dbcb7ceacdee3a6a5a16a7b621d",
+        "portable": "61919e2c5c3fad0bc1920231b81a5473ee7b01146f7cd38ce5bf84f59f8a94e7"
+      }
+    },
+    "android": {
+      "folder_url": "https://github.com/Honaro19/FHPlayer/releases",
+      "apk_url": "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2.apk",
+      "aab_url": "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2.aab",
+      "sha256": {
+        "apk": "608d3945cba3c6c4ae13e4e54b5465d2e4748ce2a4fa52dc931236e15fa4815f",
+        "aab": "6815f41ecd73209bfe570f0c35d3070b4676c2c42b93dad0b6a84d87931f0c8e"
+      }
+    }
+  }
 }
