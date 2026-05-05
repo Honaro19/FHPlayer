@@ -4,7 +4,15 @@ on:
   push:
     branches:
       - main
+      - Security-Changes-Test
+      - 'security/**'
+      - 'test/**'
   pull_request:
+    branches:
+      - main
+      - Security-Changes-Test
+      - 'security/**'
+      - 'test/**'
   workflow_dispatch:
 
 permissions:
