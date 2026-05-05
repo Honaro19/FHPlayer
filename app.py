@@ -893,32 +893,6 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
-
-        # Security headers for the local FHPlayer UI.
-        # JavaScript is required for the app, but sources are restricted to the local app itself.
-        self.send_header(
-            "Content-Security-Policy",
-            (
-                "default-src 'self'; "
-                "base-uri 'none'; "
-                "object-src 'none'; "
-                "frame-ancestors 'none'; "
-                "form-action 'self'; "
-                "script-src 'self'; "
-                "style-src 'self' 'unsafe-inline'; "
-                "img-src 'self' data: blob:; "
-                "font-src 'self' data:; "
-                "media-src 'self' blob: http://127.0.0.1:8765; "
-                "connect-src 'self' http://127.0.0.1:8765 http://localhost:8765; "
-                "worker-src 'self' blob:; "
-                "manifest-src 'self'; "
-                "upgrade-insecure-requests"
-            ),
-        )
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-
         super().end_headers()
 
     def do_GET(self) -> None:

@@ -82,22 +82,12 @@ class MainActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView() {
         webView.settings.apply {
-            // JavaScript and DOM storage are required for the FHPlayer local web UI.
-            setJavaScriptEnabled(true)
-            setDomStorageEnabled(true)
-
-            // Keep WebView access to local files and content providers disabled.
-            // Use explicit setter calls because CodeQL's Android WebView queries recognize these reliably.
-            setAllowFileAccess(false)
-            setAllowContentAccess(false)
-            setMediaPlaybackRequiresUserGesture(false)
-            setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE)
-
-            @Suppress("DEPRECATION")
-            setAllowFileAccessFromFileURLs(false)
-
-            @Suppress("DEPRECATION")
-            setAllowUniversalAccessFromFileURLs(false)
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            allowFileAccess = false
+            allowContentAccess = true
+            mediaPlaybackRequiresUserGesture = false
+            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
 
         webView.webViewClient = object : WebViewClient() {
@@ -389,11 +379,7 @@ class MainActivity : ComponentActivity() {
 
     private fun createAndAttachWebView() {
         rootContainer = FrameLayout(this)
-        webView = WebView(this).apply {
-            // Disable content:// and file:// access before attaching or loading content.
-            settings.setAllowContentAccess(false)
-            settings.setAllowFileAccess(false)
-        }
+        webView = WebView(this)
         rootContainer.addView(
             webView,
             FrameLayout.LayoutParams(
@@ -407,20 +393,10 @@ class MainActivity : ComponentActivity() {
 
     private fun recreateWebView() {
         if (::webView.isInitialized) {
-            destroyWebViewSafely(webView)
+            webView.destroy()
         }
         createAndAttachWebView()
         loadHome()
-    }
-
-    private fun destroyWebViewSafely(targetWebView: WebView) {
-        // Keep hardened settings explicit on every lifecycle path CodeQL can see.
-        targetWebView.settings.setAllowContentAccess(false)
-        targetWebView.settings.setAllowFileAccess(false)
-        targetWebView.stopLoading()
-        targetWebView.webChromeClient = null
-        targetWebView.webViewClient = WebViewClient()
-        targetWebView.destroy()
     }
 
     private fun loadHome() {
@@ -522,7 +498,7 @@ class MainActivity : ComponentActivity() {
         hideFullscreenView()
 
         if (::webView.isInitialized) {
-            destroyWebViewSafely(webView)
+            webView.destroy()
         }
 
         if (::localHttpServer.isInitialized && isFinishing) {

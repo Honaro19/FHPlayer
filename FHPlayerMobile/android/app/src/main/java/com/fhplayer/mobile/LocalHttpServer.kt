@@ -989,8 +989,6 @@ class LocalHttpServer(
             val url = "$scheme://$hostValue:$portValue/command"
             try {
                 return executeLovenseRequest(url, platformName, payload, timeoutMs) to url
-            } catch (exception: IllegalArgumentException) {
-                throw exception
             } catch (exception: Exception) {
                 lastError = exception
                 errors += "$url: ${exception.message ?: exception.javaClass.simpleName}"
@@ -1048,11 +1046,6 @@ class LocalHttpServer(
 
     private fun executeLovenseRequest(url: String, platformName: String, payload: JSONObject, timeoutMs: Int): JSONObject {
         val parsedUrl = URL(url)
-        validateLovenseRequestUrl(parsedUrl)
-
-        // Certificate pinning is intentionally not applied here: Lovense endpoints are local,
-        // user/device-specific, and may use dynamically generated hostnames or certificates.
-        // The request is restricted to local Lovense endpoints before opening the connection.
         val connection = (parsedUrl.openConnection() as HttpURLConnection).apply {
             connectTimeout = timeoutMs
             readTimeout = timeoutMs
@@ -1090,38 +1083,6 @@ class LocalHttpServer(
 
     private fun shouldUseUnsafeLovenseTls(url: URL): Boolean {
         return url.protocol.equals("https", ignoreCase = true) && isLocalLovenseTlsHost(url.host)
-    }
-
-    private fun validateLovenseRequestUrl(url: URL) {
-        val protocol = url.protocol.trim().lowercase(Locale.US)
-        if (protocol != "http" && protocol != "https") {
-            throw IllegalArgumentException("Lovense scheme must be http or https")
-        }
-
-        val hostValue = url.host?.trim()?.lowercase(Locale.US).orEmpty()
-        if (hostValue.isBlank()) {
-            throw IllegalArgumentException("Lovense host is required")
-        }
-
-        val portValue = if (url.port == -1) url.defaultPort else url.port
-        if (portValue !in 1..65535) {
-            throw IllegalArgumentException("Lovense port is invalid")
-        }
-
-        if (hostValue == "localhost") {
-            return
-        }
-
-        val embeddedIpv4 = extractLovenseIpv4(hostValue)
-        if (embeddedIpv4 != null && isLocalLovenseTlsHost(embeddedIpv4)) {
-            return
-        }
-
-        if (isLocalLovenseTlsHost(hostValue)) {
-            return
-        }
-
-        throw IllegalArgumentException("Lovense requests are restricted to local device endpoints")
     }
 
     @Throws(IOException::class)
@@ -1339,36 +1300,6 @@ class LocalHttpServer(
         return JSONObject(text)
     }
 
-    private fun contentSecurityPolicy(): String {
-        val localBaseUrl = baseUrl()
-        val localhostBaseUrl = localBaseUrl.replace("127.0.0.1", "localhost")
-        return listOf(
-            "default-src 'self'",
-            "base-uri 'none'",
-            "object-src 'none'",
-            "frame-ancestors 'none'",
-            "form-action 'self'",
-            "script-src 'self'",
-            "style-src 'self' 'unsafe-inline'",
-            "img-src 'self' data: blob:",
-            "font-src 'self' data:",
-            "media-src 'self' blob: $localBaseUrl $localhostBaseUrl",
-            "connect-src 'self' $localBaseUrl $localhostBaseUrl",
-            "worker-src 'self' blob:",
-            "manifest-src 'self'",
-        ).joinToString("; ")
-    }
-
-    private fun StringBuilder.appendSecurityHeaders() {
-        append("Content-Security-Policy-Report-Only: ")
-        append(contentSecurityPolicy())
-        append("\r\n")
-        append("X-Content-Type-Options: nosniff\r\n")
-        append("Referrer-Policy: no-referrer\r\n")
-        append("Permissions-Policy: camera=(), microphone=(), geolocation=()\r\n")
-        append("X-Frame-Options: DENY\r\n")
-    }
-
     private fun respondJson(output: OutputStream, statusCode: Int, payload: JSONObject) {
         respondBytes(
             output,
@@ -1393,7 +1324,6 @@ class LocalHttpServer(
                 append(body.size)
                 append("\r\n")
                 append("Cache-Control: no-store\r\n")
-                appendSecurityHeaders()
                 append("Connection: close\r\n")
                 append("\r\n")
             }
@@ -1428,7 +1358,6 @@ class LocalHttpServer(
                 append("\r\n")
                 append("Accept-Ranges: bytes\r\n")
                 append("Cache-Control: no-store\r\n")
-                appendSecurityHeaders()
                 if (range != null) {
                     append("Content-Range: bytes ")
                     append(start)
@@ -1489,7 +1418,6 @@ class LocalHttpServer(
                 append("\r\n")
                 append("Accept-Ranges: bytes\r\n")
                 append("Cache-Control: no-store\r\n")
-                appendSecurityHeaders()
                 if (range != null) {
                     append("Content-Range: bytes ")
                     append(start)
@@ -1553,7 +1481,6 @@ class LocalHttpServer(
                 append("Content-Length: 0\r\n")
                 append("Accept-Ranges: bytes\r\n")
                 append("Cache-Control: no-store\r\n")
-                appendSecurityHeaders()
                 append("Connection: close\r\n")
                 append("\r\n")
             }
