@@ -8,7 +8,6 @@ import ipaddress
 import logging
 from logging.handlers import RotatingFileHandler
 import re
-import ssl
 import subprocess
 import sys
 import webbrowser
@@ -885,6 +884,10 @@ def lovense_request(
 
     raise RuntimeError(f"{last_error}. Tried: {error_summary}") from last_error
 
+def sanitize_for_log(value: object) -> str:
+        text = str(value)
+        return text.replace("\r", "\\r").replace("\n", "\\n")
+
 class FHPlayerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
@@ -1253,7 +1256,8 @@ class FHPlayerHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             return
         except OSError as exc:
-            LOGGER.exception("Could not open library folder: %s", query.get("kind", ["videos"])[0])
+            requested_kind = sanitize_for_log(query.get("kind", ["videos"])[0])
+            LOGGER.exception("Could not open library folder: %s", requested_kind)
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
 
@@ -1404,7 +1408,7 @@ def main() -> None:
             error_log.write_text(error_msg)
             print(f"Error log written to {error_log}", flush=True)
         except Exception:
-            pass
+            print(f"Could not write error log: {exc}", flush=True)
 
         if sys.platform == "win32":
             import time

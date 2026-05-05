@@ -81,16 +81,15 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView() {
-        webView.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            allowFileAccess = false
-            // Prevent WebView JavaScript from loading content:// URLs directly.
-            // Android file/document selection still works through the native file chooser callback.
-            allowContentAccess = false
-            mediaPlaybackRequiresUserGesture = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-        }
+        val webSettings = webView.settings
+        webSettings.javaScriptEnabled = true
+        webSettings.domStorageEnabled = true
+        webSettings.allowFileAccess = false
+        // Prevent WebView JavaScript from loading content:// URLs directly.
+        // Android file/document selection still works through the native file chooser callback.
+        webSettings.setAllowContentAccess(false)
+        webSettings.mediaPlaybackRequiresUserGesture = false
+        webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
