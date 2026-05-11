@@ -12,9 +12,10 @@ import 'package:fhplayer_flutter/main.dart';
 void main() {
   testWidgets('App starts', (WidgetTester tester) async {
     await tester.pumpWidget(const FHPlayerApp());
+    await tester.pumpAndSettle();
 
-    expect(find.text('FHPlayer'), findsOneWidget);
-    expect(find.text('Select video'), findsOneWidget);
-    expect(find.text('Select funscript'), findsOneWidget);
+    expect(find.text('Playlist mode'), findsOneWidget);
+    expect(find.text('Playlist'), findsAtLeastNWidgets(1));
+    expect(find.text('Library folders'), findsOneWidget);
   });
 }

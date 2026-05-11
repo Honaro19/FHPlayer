@@ -23,10 +23,7 @@ void main() {
         <String>['mock-nora', 'mock-edge', 'mock-hush'],
       );
       expect(commands[0].action, LovenseMockCommandAction.vibrate);
-      expect(
-        commands[0].strength,
-        LovenseMockClient.defaultVibrateStrength,
-      );
+      expect(commands[0].strength, LovenseMockClient.defaultVibrateStrength);
       expect(
         commands[0].durationMs,
         LovenseMockClient.defaultVibrateDurationMs,
@@ -192,6 +189,62 @@ void main() {
         LovenseMockEvaluationStatus.noDevicesConfigured,
       );
       expect(results.single.message, contains('No simulated devices'));
+      expect(client.history, isEmpty);
+    });
+
+    test('supports multi-branch rules and context variables', () {
+      final LovenseMockClient client = LovenseMockClient.demo(
+        rulesText:
+            'if delta >= 20 then stop()\n'
+            'else if pos >= 50 then vibrate(pos, current)\n'
+            'else vibrate(index, delta)',
+      );
+
+      final List<LovenseMockCommand> commands = client.sendForAction(
+        const LovenseActionContext(
+          index: 3,
+          atMs: 2500,
+          pos: 80,
+          currentMs: 2504,
+          deltaMs: 4,
+        ),
+      );
+
+      expect(commands, hasLength(3));
+      expect(commands[0].device.id, 'mock-nora');
+      expect(commands[0].action, LovenseMockCommandAction.vibrate);
+      expect(commands[0].strength, 20);
+      expect(commands[0].durationMs, 2504);
+      expect(commands[1].device.id, 'mock-edge');
+      expect(commands[1].action, LovenseMockCommandAction.vibrate);
+      expect(commands[2].device.id, 'mock-hush');
+      expect(commands[2].action, LovenseMockCommandAction.stop);
+    });
+
+    test('reports no matching rule branches when no else exists', () {
+      final LovenseMockClient client = LovenseMockClient.demo(
+        rulesText: 'if pos > 95 then vibrate(10)',
+      );
+
+      final List<LovenseMockEvaluationResult> results = client.evaluateAction(
+        const LovenseActionContext(
+          index: 2,
+          atMs: 1200,
+          pos: 40,
+          currentMs: 1210,
+          deltaMs: 10,
+        ),
+      );
+
+      expect(results, hasLength(3));
+      expect(
+        results.every(
+          (LovenseMockEvaluationResult result) =>
+              result.status == LovenseMockEvaluationStatus.noMatchingRule &&
+              !result.hasCommand,
+        ),
+        isTrue,
+      );
       expect(client.history, isEmpty);
     });
   });

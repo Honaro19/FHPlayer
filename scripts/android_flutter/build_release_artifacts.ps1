@@ -5,10 +5,12 @@ param(
   [string]$SigningMode = "Auto",
   [string]$SigningPropertiesPath = "",
   [switch]$SkipApk,
-  [switch]$SkipBundle
+  [switch]$SkipBundle,
+  [string]$FlutterRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
 function Resolve-AbsolutePath {
   param(
@@ -36,22 +38,43 @@ function Get-AppVersion {
   }
 
   $appVersion = (Get-Content -LiteralPath $versionPath -Raw).Trim()
-  if ($appVersion -notmatch '^\d+\.\d+\.\d+$') {
+  if ($appVersion -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
     throw "VERSION must use major.minor.patch. Found: $appVersion"
   }
 
   return $appVersion
 }
 
-function Resolve-GradleLauncher {
-  $gradle = Get-ChildItem "$env:USERPROFILE\.gradle\wrapper\dists\gradle-8.0.2-bin" -Recurse -Filter gradle.bat |
-    Select-Object -First 1 -ExpandProperty FullName
+function Get-AppVersionCode {
+  param([string]$AppVersion)
 
-  if (-not $gradle) {
-    throw "Gradle 8.0.2 was not found in the local wrapper cache. Open any Android project once in Android Studio or install Gradle 8.0.2."
+  if ($AppVersion -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+    throw "VERSION must use major.minor.patch. Found: $AppVersion"
   }
 
-  return $gradle
+  return ([int]$matches[1] * 10000) + ([int]$matches[2] * 100) + ([int]$matches[3])
+}
+
+function Resolve-FlutterRoot {
+  param([string]$ExplicitRoot)
+
+  $candidates = @(
+    $ExplicitRoot,
+    $env:FHPLAYER_FLUTTER_ROOT,
+    $env:FLUTTER_ROOT,
+    "C:\\Dev\\flutter"
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+  foreach ($candidate in $candidates) {
+    $resolved = Resolve-AbsolutePath -Path $candidate -BasePath (Get-Location).Path
+    $snapshotPath = Join-Path $resolved "bin\\cache\\flutter_tools.snapshot"
+    $dartPath = Join-Path $resolved "bin\\cache\\dart-sdk\\bin\\dart.exe"
+    if ((Test-Path $snapshotPath) -and (Test-Path $dartPath)) {
+      return $resolved
+    }
+  }
+
+  throw "Flutter SDK not found. Set -FlutterRoot, FHPLAYER_FLUTTER_ROOT, or FLUTTER_ROOT."
 }
 
 function Read-PropertiesFile {
@@ -100,27 +123,47 @@ function Get-SigningValue {
   return ""
 }
 
+function Resolve-BuiltArtifact {
+  param(
+    [string[]]$Candidates,
+    [string]$BuildDirPath,
+    [string]$Filter
+  )
+
+  foreach ($candidate in $Candidates) {
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+
+  $fallback = Get-ChildItem -Path $BuildDirPath -Recurse -Filter $Filter -ErrorAction SilentlyContinue |
+    Select-Object -First 1 -ExpandProperty FullName
+  if ($fallback) {
+    return $fallback
+  }
+
+  throw "Built artifact not found ($Filter)."
+}
+
 if ($SkipApk -and $SkipBundle) {
   throw "At least one release artifact must be enabled. Remove -SkipApk or -SkipBundle."
 }
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$flutterProjectPath = Join-Path $projectRoot "FHPlayerMobile\\fhplayer_flutter"
+$flutterAndroidPath = Join-Path $flutterProjectPath "android"
 $appVersion = Get-AppVersion -ProjectRoot $projectRoot
-$gradle = Resolve-GradleLauncher
-$resolvedBuildDir = if ($BuildDir) {
-  Resolve-AbsolutePath -Path $BuildDir -BasePath (Get-Location).Path
-} else {
-  Join-Path $env:LOCALAPPDATA "FHPlayer\AndroidReleaseBuild\app"
-}
+$appVersionCode = Get-AppVersionCode -AppVersion $appVersion
+$resolvedBuildDir = Join-Path $flutterProjectPath "build"
 $resolvedOutputDir = if ($OutputDir) {
   Resolve-AbsolutePath -Path $OutputDir -BasePath (Get-Location).Path
 } else {
-  Join-Path $projectRoot "installers\android"
+  Join-Path $projectRoot "installers\\android"
 }
 $resolvedSigningPropertiesPath = if ($SigningPropertiesPath) {
   Resolve-AbsolutePath -Path $SigningPropertiesPath -BasePath (Get-Location).Path
 } else {
-  Join-Path $PSScriptRoot "release-signing.properties"
+  Join-Path $flutterAndroidPath "release-signing.properties"
 }
 $normalizedSigningMode = $SigningMode.ToLowerInvariant()
 $signingProperties = Read-PropertiesFile -Path $resolvedSigningPropertiesPath
@@ -134,71 +177,61 @@ if ($normalizedSigningMode -eq "require" -and -not $hasReleaseSigning) {
   throw "Android release signing was required, but no complete signing configuration was found."
 }
 if ($normalizedSigningMode -eq "auto" -and -not $hasReleaseSigning) {
-  Write-Warning "No Android release signing configuration was found. Building unsigned release artifacts."
+  Write-Warning "No Android release signing configuration was found. Building release artifacts with debug signing."
 }
 
-New-Item -ItemType Directory -Force -Path $resolvedBuildDir | Out-Null
+$resolvedFlutterRoot = Resolve-FlutterRoot -ExplicitRoot $FlutterRoot
 New-Item -ItemType Directory -Force -Path $resolvedOutputDir | Out-Null
 
-$generatedAssetDirs = @(
-  (Join-Path $PSScriptRoot "app\build\generated\fhplayer-assets"),
-  (Join-Path $PSScriptRoot "app\build\intermediates\assets\debug\www"),
-  (Join-Path $PSScriptRoot "app\build\intermediates\assets\release\www"),
-  (Join-Path $resolvedBuildDir "generated\fhplayer-assets"),
-  (Join-Path $resolvedBuildDir "intermediates\assets\debug\www"),
-  (Join-Path $resolvedBuildDir "intermediates\assets\release\www")
-)
-
-foreach ($assetDir in $generatedAssetDirs) {
-  if (Test-Path $assetDir) {
-    Remove-Item -LiteralPath $assetDir -Recurse -Force
-  }
-}
-
-$gradleArguments = @(
-  "-p", $PSScriptRoot,
-  "-PfhplayerBuildDir=$resolvedBuildDir",
-  "-PfhplayerReleaseSigningMode=$normalizedSigningMode"
-)
+$dartPath = Join-Path $resolvedFlutterRoot "bin\\cache\\dart-sdk\\bin\\dart.exe"
+$snapshotPath = Join-Path $resolvedFlutterRoot "bin\\cache\\flutter_tools.snapshot"
+$env:FLUTTER_SUPPRESS_ANALYTICS = "true"
+$env:DART_SUPPRESS_ANALYTICS = "true"
+$env:FHPLAYER_ANDROID_SIGNING_MODE = $normalizedSigningMode
 if (Test-Path $resolvedSigningPropertiesPath) {
-  $gradleArguments += "-PfhplayerReleaseSigningProperties=$resolvedSigningPropertiesPath"
+  $env:FHPLAYER_ANDROID_SIGNING_PROPERTIES_PATH = $resolvedSigningPropertiesPath
 }
-
-$gradleTasks = @("clean")
-if (-not $SkipApk) {
-  $gradleTasks += "assembleRelease"
-}
-if (-not $SkipBundle) {
-  $gradleTasks += "bundleRelease"
-}
-
-& $gradle @gradleArguments @gradleTasks
-
-if ($LASTEXITCODE -ne 0) {
-  exit $LASTEXITCODE
+if ($BuildDir) {
+  Write-Warning "The current Flutter toolchain does not support --build-dir for release artifacts; using the default build directory."
 }
 
 if (-not $SkipApk) {
-  $apkCandidates = @(
-    (Join-Path $resolvedBuildDir "outputs\apk\release\app-release.apk"),
-    (Join-Path $resolvedBuildDir "outputs\apk\release\app-release-unsigned.apk")
-  )
-  $apkPath = $apkCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-  if (-not $apkPath) {
-    throw "Gradle finished, but no release APK was found under $resolvedBuildDir\outputs\apk\release"
+  Push-Location $flutterProjectPath
+  try {
+    & $dartPath $snapshotPath build apk --release --no-pub --build-name $appVersion --build-number "$appVersionCode"
+    if ($LASTEXITCODE -ne 0) {
+      exit $LASTEXITCODE
+    }
+  } finally {
+    Pop-Location
   }
 
+  $apkPath = Resolve-BuiltArtifact -BuildDirPath $resolvedBuildDir -Filter "app-release*.apk" -Candidates @(
+    (Join-Path $resolvedBuildDir "app\\outputs\\flutter-apk\\app-release.apk"),
+    (Join-Path $resolvedBuildDir "app\\outputs\\flutter-apk\\app-release-unsigned.apk"),
+    (Join-Path $flutterProjectPath "build\\app\\outputs\\flutter-apk\\app-release.apk"),
+    (Join-Path $flutterProjectPath "build\\app\\outputs\\flutter-apk\\app-release-unsigned.apk")
+  )
   $finalApkPath = Join-Path $resolvedOutputDir "FHPlayer-$appVersion.apk"
   Copy-Item -LiteralPath $apkPath -Destination $finalApkPath -Force
   Write-Host "Release APK: $finalApkPath"
 }
 
 if (-not $SkipBundle) {
-  $aabPath = Join-Path $resolvedBuildDir "outputs\bundle\release\app-release.aab"
-  if (-not (Test-Path $aabPath)) {
-    throw "Gradle finished, but no release App Bundle was found at $aabPath"
+  Push-Location $flutterProjectPath
+  try {
+    & $dartPath $snapshotPath build appbundle --release --no-pub --build-name $appVersion --build-number "$appVersionCode"
+    if ($LASTEXITCODE -ne 0) {
+      exit $LASTEXITCODE
+    }
+  } finally {
+    Pop-Location
   }
 
+  $aabPath = Resolve-BuiltArtifact -BuildDirPath $resolvedBuildDir -Filter "app-release.aab" -Candidates @(
+    (Join-Path $resolvedBuildDir "app\\outputs\\bundle\\release\\app-release.aab"),
+    (Join-Path $flutterProjectPath "build\\app\\outputs\\bundle\\release\\app-release.aab")
+  )
   $finalAabPath = Join-Path $resolvedOutputDir "FHPlayer-$appVersion.aab"
   Copy-Item -LiteralPath $aabPath -Destination $finalAabPath -Force
   Write-Host "Release AAB: $finalAabPath"

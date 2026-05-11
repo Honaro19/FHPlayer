@@ -98,7 +98,7 @@ release/
 
 1. Update `VERSION`.
 2. Build the Windows release installer with `.\build_windows_release.ps1`.
-3. Build the Android release artifacts with `.\FHPlayerMobile\android\build_release_artifacts.ps1`.
+3. Build the Android release artifacts with `.\scripts\android_flutter\build_release_artifacts.ps1`.
 4. Run `.\scripts\prepare_public_release.ps1 -DryRun` and verify the resolved input paths and release notes.
 5. Run `.\scripts\prepare_public_release.ps1` to create the public release folders, portable ZIP, checksums, and manifest.
 6. Optionally run `.\scripts\prepare_public_release.ps1 -VerifyOnly` as a final local consistency check.

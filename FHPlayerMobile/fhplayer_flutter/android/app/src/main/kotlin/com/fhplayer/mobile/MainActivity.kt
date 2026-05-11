@@ -1,4 +1,4 @@
-package com.example.fhplayer_flutter
+package com.fhplayer.mobile
 
 import io.flutter.embedding.android.FlutterActivity
 

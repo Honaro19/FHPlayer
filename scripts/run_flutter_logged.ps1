@@ -31,6 +31,30 @@ function Quote-CmdArgument {
     return '"' + ($Value -replace '"', '""') + '"'
 }
 
+function Test-DirectoryDeletePermission {
+    param([string]$DirectoryPath)
+
+    if (-not [System.IO.Directory]::Exists($DirectoryPath)) {
+        [System.IO.Directory]::CreateDirectory($DirectoryPath) | Out-Null
+    }
+
+    $probePath = Join-Path $DirectoryPath ".codex-delete-probe.tmp"
+    try {
+        [System.IO.File]::WriteAllText($probePath, "probe", [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::Delete($probePath)
+        return $true
+    } catch {
+        try {
+            if ([System.IO.File]::Exists($probePath)) {
+                [System.IO.File]::Delete($probePath)
+            }
+        } catch {
+            # Keep root cause from first failure.
+        }
+        return $false
+    }
+}
+
 $flutterPath = Resolve-RequiredPath -PathValue $FlutterExe -Label "Flutter executable"
 $projectPath = Resolve-RequiredPath -PathValue $ProjectDir -Label "Project directory"
 
@@ -107,6 +131,35 @@ if ($launcherName -in @("flutter.bat", "dart.bat")) {
         Add-Content -LiteralPath $metaPath -Encoding UTF8 -Value @(
             "PreflightLockWritable: False"
             "PreflightError: $($_.Exception.Message)"
+            "Finished: $(Get-Date -Format o)"
+            "TimedOut: False"
+            "ExitCode: $exitCode"
+            "Stdout: $stdoutPath"
+            "Stderr: $stderrPath"
+        )
+
+        [pscustomobject]@{
+            ExitCode = $exitCode
+            TimedOut = $false
+            Stdout = $stdoutPath
+            Stderr = $stderrPath
+            Meta = $metaPath
+        }
+        exit $exitCode
+    }
+}
+
+$isTestCommand = $FlutterArgs -contains "test"
+if ($isTestCommand) {
+    $unitTestAssetsDir = Join-Path $projectPath "build\unit_test_assets"
+    Add-Content -LiteralPath $metaPath -Encoding UTF8 -Value "PreflightUnitTestAssetsDir: $unitTestAssetsDir"
+    $hasDeletePermission = Test-DirectoryDeletePermission -DirectoryPath $unitTestAssetsDir
+    Add-Content -LiteralPath $metaPath -Encoding UTF8 -Value "PreflightUnitTestAssetsDeleteWritable: $hasDeletePermission"
+    if (-not $hasDeletePermission) {
+        $exitCode = 125
+        $message = "The current context cannot delete files under '$unitTestAssetsDir'. Flutter test may fail with PathAccessException while overwriting NativeAssetsManifest.json. Run this script outside the restricted sandbox context."
+        [System.IO.File]::WriteAllText($stderrPath, "$message`r`n", [System.Text.UTF8Encoding]::new($false))
+        Add-Content -LiteralPath $metaPath -Encoding UTF8 -Value @(
             "Finished: $(Get-Date -Format o)"
             "TimedOut: False"
             "ExitCode: $exitCode"

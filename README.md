@@ -304,26 +304,18 @@ Useful options:
 
 ## Mobile Version
 
-FHPlayer now includes an Android app target in `FHPlayerMobile/android`.
-
-The Android build wraps the existing browser UI inside a native `WebView` app and starts a small embedded local HTTP server for the static files plus the Lovense API bridge. File selection uses the native Android document picker.
+FHPlayer includes a Flutter Android app target in `FHPlayerMobile/fhplayer_flutter/android`.
 
 Build the debug APK with:
 
 ```powershell
-FHPlayerMobile\android\build_debug_apk.ps1
+scripts\android_flutter\build_debug_apk.ps1
 ```
 
-To write the Gradle build output somewhere else:
+To write the output APK somewhere else:
 
 ```powershell
-FHPlayerMobile\android\build_debug_apk.ps1 -BuildDir .tmp\android-build\app -OutputDir .tmp\android-output
-```
-
-Or with double-click / Command Prompt:
-
-```cmd
-FHPlayerMobile\android\build_debug_apk.cmd
+scripts\android_flutter\build_debug_apk.ps1 -OutputDir .tmp\android-output
 ```
 
 The APK is written to:
@@ -335,19 +327,13 @@ installers\android\FHPlayer-<version>-debug.apk
 Install the APK onto a connected emulator or Android device with:
 
 ```powershell
-FHPlayerMobile\android\install_debug_apk.ps1 -LaunchApp
+scripts\android_flutter\install_debug_apk.ps1 -LaunchApp
 ```
 
-If you built the APK into a custom directory, pass the same build path during install:
+If you built the APK into a custom output directory, pass that APK path during install:
 
 ```powershell
-FHPlayerMobile\android\install_debug_apk.ps1 -ApkPath .tmp\android-output\FHPlayer-<version>-debug.apk -LaunchApp
-```
-
-Or with double-click / Command Prompt:
-
-```cmd
-FHPlayerMobile\android\install_debug_apk.cmd
+scripts\android_flutter\install_debug_apk.ps1 -ApkPath .tmp\android-output\FHPlayer-<version>-debug.apk -LaunchApp
 ```
 
 Current Android limitations:
@@ -362,7 +348,7 @@ Current Android limitations:
 Build release artifacts with:
 
 ```powershell
-FHPlayerMobile\android\build_release_artifacts.ps1
+scripts\android_flutter\build_release_artifacts.ps1
 ```
 
 That produces:
@@ -374,7 +360,7 @@ installers\android\FHPlayer-<version>.aab
 
 If no signing configuration is present, the script builds unsigned release artifacts by default and tells you so.
 
-To require signing, copy `FHPlayerMobile\android\release-signing.example.properties` to `FHPlayerMobile\android\release-signing.properties` and fill in the real values, or provide the same values through environment variables:
+To require signing, copy `FHPlayerMobile\fhplayer_flutter\android\release-signing.example.properties` to `FHPlayerMobile\fhplayer_flutter\android\release-signing.properties` and fill in the real values, or provide the same values through environment variables:
 
 - `FHPLAYER_ANDROID_KEYSTORE_PATH`
 - `FHPLAYER_ANDROID_KEYSTORE_PASSWORD`
@@ -384,16 +370,21 @@ To require signing, copy `FHPlayerMobile\android\release-signing.example.propert
 Then build with:
 
 ```powershell
-FHPlayerMobile\android\build_release_artifacts.ps1 -SigningMode Require
+scripts\android_flutter\build_release_artifacts.ps1 -SigningMode Require
 ```
 
 Useful options:
 
 - `-SkipApk`
 - `-SkipBundle`
-- `-BuildDir .tmp\android-release-build\app`
 - `-OutputDir .tmp\android-release-output`
-- `-SigningPropertiesPath .\FHPlayerMobile\android\release-signing.properties`
+- `-SigningPropertiesPath .\FHPlayerMobile\fhplayer_flutter\android\release-signing.properties`
+
+## Internal Testing Guide
+
+For the full internal Windows testing flow (fast checks, Flutter hang troubleshooting, and Android emulator validation), see:
+
+- `INTERNAL_TESTING_GUIDE.md`
 
 ## Smoke Tests
 
@@ -426,6 +417,42 @@ Or directly with npm:
 ```powershell
 npm run test:rules
 ```
+
+## Flutter Tests
+
+Run Flutter tests through the logged wrapper:
+
+```powershell
+.\scripts\test_flutter.ps1
+```
+
+Run only one Flutter test file:
+
+```powershell
+.\scripts\test_flutter.ps1 -TestPath test\lovense_mock_test.dart
+```
+
+Useful options:
+
+- `-TimeoutSeconds 900` for slower machines
+- `-AllowPub` to allow `pub get` during the test run
+- `-Reporter compact|expanded|json`
+- `-ExtraFlutterArgs '--plain-name','My test name'`
+
+The script writes logs to:
+
+- `.tmp\flutter-logs\*.out.log`
+- `.tmp\flutter-logs\*.err.log`
+- `.tmp\flutter-logs\*.meta.log`
+
+Common failure signatures and meaning:
+
+- `PathAccessException: Cannot copy ... build\unit_test_assets\NativeAssetsManifest.json ... Access denied`
+  - The execution context cannot overwrite/delete files under `build\unit_test_assets`.
+  - Re-run outside restrictive sandbox environments.
+- `Flutter failed to run "git ...". The flutter tool cannot access the file or directory.`
+  - The execution context cannot run required subprocesses (for example `git`) with sufficient access.
+  - Re-run outside restrictive sandbox environments.
 
 ## Daily Use
 

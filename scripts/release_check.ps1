@@ -149,7 +149,6 @@ $releaseCheckRoot = if ($OutputRoot) {
 $windowsReleaseOutputDir = Join-Path $releaseCheckRoot "windows-release-output"
 $windowsReleaseBuildRoot = Join-Path $releaseCheckRoot "windows-release-build"
 $windowsReleaseTempRoot = Join-Path $releaseCheckRoot "windows-release-temp"
-$androidReleaseBuildDir = Join-Path $releaseCheckRoot "android-release-build\app"
 $androidReleaseOutputDir = Join-Path $releaseCheckRoot "android-release-output"
 $publicReleaseRoot = Join-Path $releaseCheckRoot "public-release\FHPlayer"
 $smokeRoot = Join-Path $releaseCheckRoot "smoke-tests"
@@ -179,9 +178,9 @@ try {
       ".\build_windows.ps1",
       ".\build_windows_installer.ps1",
       ".\build_windows_release.ps1",
-      ".\FHPlayerMobile\android\build_debug_apk.ps1",
-      ".\FHPlayerMobile\android\install_debug_apk.ps1",
-      ".\FHPlayerMobile\android\build_release_artifacts.ps1",
+      ".\scripts\android_flutter\build_debug_apk.ps1",
+      ".\scripts\android_flutter\install_debug_apk.ps1",
+      ".\scripts\android_flutter\build_release_artifacts.ps1",
       ".\scripts\smoke_test.ps1",
       ".\scripts\prepare_public_release.ps1",
       ".\scripts\test_rule_engine.ps1",
@@ -245,13 +244,12 @@ try {
   if (-not $SkipAndroidRelease) {
     Write-Step "Build Android release artifacts"
     Invoke-CheckedCommand `
-      -FilePath (Join-Path $projectRoot "FHPlayerMobile\android\build_release_artifacts.ps1") `
+      -FilePath (Join-Path $projectRoot "scripts\android_flutter\build_release_artifacts.ps1") `
       -Arguments @(
-        "-BuildDir", $androidReleaseBuildDir,
         "-OutputDir", $androidReleaseOutputDir,
         "-SigningMode", $AndroidSigningMode
       ) `
-      -WorkingDirectory (Join-Path $projectRoot "FHPlayerMobile\android") `
+      -WorkingDirectory $projectRoot `
       -Environment @{
         FHPLAYER_NO_PAUSE = "1"
       }

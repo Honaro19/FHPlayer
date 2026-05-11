@@ -328,7 +328,6 @@ $windowsInstallerBuildOutputRoot = Join-Path $smokeRoot "windows-installer-build
 $installerLocalAppData = Join-Path $smokeRoot "installer-localappdata"
 $installerInstallRoot = Join-Path $smokeRoot "installer-app"
 $installerLogPath = Join-Path $smokeRoot "installer.log"
-$androidBuildDir = Join-Path $smokeRoot "android-build\app"
 $androidOutputDir = Join-Path $smokeRoot "android-output"
 $summary = [System.Collections.Generic.List[string]]::new()
 
@@ -468,9 +467,9 @@ try {
   if (-not $SkipAndroid) {
     Write-Step "Build Android debug APK"
     Invoke-CheckedCommand `
-      -FilePath (Join-Path $projectRoot "FHPlayerMobile\android\build_debug_apk.ps1") `
-      -Arguments @("-BuildDir", $androidBuildDir, "-OutputDir", $androidOutputDir) `
-      -WorkingDirectory (Join-Path $projectRoot "FHPlayerMobile\android") `
+      -FilePath (Join-Path $projectRoot "scripts\android_flutter\build_debug_apk.ps1") `
+      -Arguments @("-OutputDir", $androidOutputDir) `
+      -WorkingDirectory $projectRoot `
       -Environment @{
         FHPLAYER_NO_PAUSE = "1"
       }
@@ -497,9 +496,9 @@ try {
       }
 
       Invoke-CheckedCommand `
-        -FilePath (Join-Path $projectRoot "FHPlayerMobile\android\install_debug_apk.ps1") `
+        -FilePath (Join-Path $projectRoot "scripts\android_flutter\install_debug_apk.ps1") `
         -Arguments @("-ApkPath", $apkPath, "-DeviceSerial", $targetDeviceSerial, "-LaunchApp") `
-        -WorkingDirectory (Join-Path $projectRoot "FHPlayerMobile\android")
+        -WorkingDirectory $projectRoot
 
       $androidProcessId = Wait-ForAndroidProcessId -AdbPath $adbPath -DeviceSerial $targetDeviceSerial -PackageName "com.fhplayer.mobile" -TimeoutSeconds 20
       if (-not $androidProcessId) {
