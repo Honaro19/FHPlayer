@@ -19,22 +19,6 @@ function Write-Step {
   Write-Host "==> $Message"
 }
 
-function Resolve-PythonCommand {
-  $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
-  if ($pythonCommand) {
-    return $pythonCommand.Source
-  }
-
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    $pythonExecutable = (& py -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
-    if ($LASTEXITCODE -eq 0 -and $pythonExecutable -and (Test-Path $pythonExecutable)) {
-      return $pythonExecutable
-    }
-  }
-
-  throw "Python launcher not found. Install Python 3.10+ first."
-}
-
 function Resolve-AdbPath {
   $sdkAdb = Join-Path $env:LOCALAPPDATA "Android\Sdk\platform-tools\adb.exe"
   if (Test-Path $sdkAdb) {
@@ -148,30 +132,6 @@ function Restore-FileSnapshot {
   }
 }
 
-function Test-HealthEndpoint {
-  param([string]$Url)
-
-  try {
-    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
-    if ($response.StatusCode -eq 200) {
-      return $response.Content
-    }
-  } catch {
-    return $null
-  }
-
-  return $null
-}
-
-function Assert-PortFree {
-  param([string]$Url)
-
-  $response = Test-HealthEndpoint -Url $Url
-  if ($response) {
-    throw "Smoke test port is already in use: $Url"
-  }
-}
-
 function Wait-ForPath {
   param(
     [string]$Path,
@@ -226,17 +186,14 @@ function ConvertTo-ProcessArgument {
   return '"' + $escaped + '"'
 }
 
-function Start-SmokeProcess {
+function Start-AppProcessSmoke {
   param(
     [string]$FilePath,
     [string[]]$Arguments = @(),
     [string]$WorkingDirectory,
-    [hashtable]$Environment = @{},
     [string]$Name,
-    [string]$HealthUrl
+    [int]$StartupDelaySeconds = 4
   )
-
-  Assert-PortFree -Url $HealthUrl
 
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $FilePath
@@ -246,41 +203,23 @@ function Start-SmokeProcess {
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
 
-  foreach ($key in $Environment.Keys) {
-    $psi.Environment[$key] = [string]$Environment[$key]
-  }
-
   $process = [System.Diagnostics.Process]::Start($psi)
   if (-not $process) {
-    throw "Could not start smoke test process: $Name"
+    throw "Could not start process: $Name"
   }
 
-  for ($attempt = 0; $attempt -lt 20; $attempt++) {
-    Start-Sleep -Milliseconds 500
-    $response = Test-HealthEndpoint -Url $HealthUrl
-    if ($response) {
-      return @{
-        Process = $process
-        Response = $response
-      }
-    }
-
-    if ($process.HasExited) {
-      break
-    }
+  Start-Sleep -Seconds $StartupDelaySeconds
+  $process.Refresh()
+  if ($process.HasExited) {
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    throw "$Name exited too early. ExitCode=$($process.ExitCode) STDOUT=$stdout STDERR=$stderr"
   }
 
-  $stdout = $process.StandardOutput.ReadToEnd()
-  $stderr = $process.StandardError.ReadToEnd()
-  if (-not $process.HasExited) {
-    $process.Kill()
-    $process.WaitForExit()
-  }
-
-  throw "$Name did not become healthy. ExitCode=$($process.ExitCode) STDOUT=$stdout STDERR=$stderr"
+  return $process
 }
 
-function Stop-SmokeProcess {
+function Stop-AppProcessSmoke {
   param([System.Diagnostics.Process]$Process)
 
   if ($Process -and -not $Process.HasExited) {
@@ -307,7 +246,6 @@ function Get-AppVersion {
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $appVersion = Get-AppVersion -ProjectRoot $projectRoot
-$healthUrl = "http://127.0.0.1:8765/api/health"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $smokeRoot = if ($SmokeRoot) {
   if ([System.IO.Path]::IsPathRooted($SmokeRoot)) {
@@ -318,50 +256,28 @@ $smokeRoot = if ($SmokeRoot) {
 } else {
   Join-Path $projectRoot ".tmp\smoke-tests\$timestamp"
 }
-$desktopLocalAppData = Join-Path $smokeRoot "desktop-localappdata"
 $windowsExeOutputRoot = Join-Path $smokeRoot "windows-exe-output"
-$windowsExeTempRoot = Join-Path $smokeRoot "windows-exe-temp"
-$exeLocalAppData = Join-Path $smokeRoot "exe-localappdata"
 $windowsInstallerOutputDir = Join-Path $smokeRoot "windows-installer-output"
 $windowsInstallerTempRoot = Join-Path $smokeRoot "windows-installer-temp"
 $windowsInstallerBuildOutputRoot = Join-Path $smokeRoot "windows-installer-build-output"
-$installerLocalAppData = Join-Path $smokeRoot "installer-localappdata"
 $installerInstallRoot = Join-Path $smokeRoot "installer-app"
 $installerLogPath = Join-Path $smokeRoot "installer.log"
 $androidOutputDir = Join-Path $smokeRoot "android-output"
 $summary = [System.Collections.Generic.List[string]]::new()
 
+if ($SkipPythonDesktop) {
+  Write-Warning "-SkipPythonDesktop is deprecated and ignored. The desktop app smoke test now targets Flutter Windows only."
+}
+
 New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
 
 try {
-  if (-not $SkipPythonDesktop) {
-    Write-Step "Smoke test desktop Python app"
-    New-Item -ItemType Directory -Force -Path $desktopLocalAppData | Out-Null
-    $pythonCommand = Resolve-PythonCommand
-    $pythonSmoke = Start-SmokeProcess `
-      -FilePath $pythonCommand `
-      -Arguments @("app.py") `
-      -WorkingDirectory $projectRoot `
-      -Environment @{
-        FHPLAYER_NO_BROWSER = "1"
-        LOCALAPPDATA = $desktopLocalAppData
-      } `
-      -Name "Python desktop app" `
-      -HealthUrl $healthUrl
-    try {
-      Write-Host $pythonSmoke.Response
-      $summary.Add("Python desktop app: ok")
-    } finally {
-      Stop-SmokeProcess -Process $pythonSmoke.Process
-    }
-  }
-
   if (-not $SkipWindowsExe) {
-    Write-Step "Build and smoke test Windows EXE"
-    New-Item -ItemType Directory -Force -Path $windowsExeTempRoot, $windowsExeOutputRoot, $exeLocalAppData | Out-Null
+    Write-Step "Build and smoke test Windows Flutter EXE"
+    New-Item -ItemType Directory -Force -Path $windowsExeOutputRoot | Out-Null
     Invoke-CheckedCommand `
       -FilePath (Join-Path $projectRoot "build_windows.ps1") `
-      -Arguments @("-OutputRoot", $windowsExeOutputRoot, "-TempRoot", $windowsExeTempRoot) `
+      -Arguments @("-OutputRoot", $windowsExeOutputRoot) `
       -WorkingDirectory $projectRoot `
       -Environment @{
         FHPLAYER_NO_PAUSE = "1"
@@ -372,20 +288,14 @@ try {
       throw "Missing built Windows EXE at $exePath"
     }
 
-    $exeSmoke = Start-SmokeProcess `
+    $exeSmoke = Start-AppProcessSmoke `
       -FilePath $exePath `
       -WorkingDirectory (Split-Path $exePath -Parent) `
-      -Environment @{
-        FHPLAYER_NO_BROWSER = "1"
-        LOCALAPPDATA = $exeLocalAppData
-      } `
-      -Name "Windows EXE" `
-      -HealthUrl $healthUrl
+      -Name "Windows EXE"
     try {
-      Write-Host $exeSmoke.Response
       $summary.Add("Windows EXE: ok")
     } finally {
-      Stop-SmokeProcess -Process $exeSmoke.Process
+      Stop-AppProcessSmoke -Process $exeSmoke
     }
   }
 
@@ -420,7 +330,7 @@ try {
       throw "Missing built Windows installer at $setupPath"
     }
 
-    New-Item -ItemType Directory -Force -Path $installerInstallRoot, $installerLocalAppData | Out-Null
+    New-Item -ItemType Directory -Force -Path $installerInstallRoot | Out-Null
     Invoke-CheckedCommand `
       -FilePath $setupPath `
       -Arguments @(
@@ -439,20 +349,14 @@ try {
       throw "Installed EXE not found at $installedExe"
     }
 
-    $installerSmoke = Start-SmokeProcess `
+    $installerSmoke = Start-AppProcessSmoke `
       -FilePath $installedExe `
       -WorkingDirectory $installerInstallRoot `
-      -Environment @{
-        FHPLAYER_NO_BROWSER = "1"
-        LOCALAPPDATA = $installerLocalAppData
-      } `
-      -Name "Installed Windows EXE" `
-      -HealthUrl $healthUrl
+      -Name "Installed Windows EXE"
     try {
-      Write-Host $installerSmoke.Response
       $summary.Add("Windows installer: ok")
     } finally {
-      Stop-SmokeProcess -Process $installerSmoke.Process
+      Stop-AppProcessSmoke -Process $installerSmoke
     }
 
     $uninstallerPath = Join-Path $installerInstallRoot "unins000.exe"

@@ -6,7 +6,7 @@ plugins {
 
 import java.util.Properties
 
-val appVersionFile = layout.projectDirectory.file("../../../../VERSION").asFile
+val appVersionFile = layout.projectDirectory.file("../../../VERSION").asFile
 if (!appVersionFile.exists()) {
     throw GradleException("Missing VERSION file at ${appVersionFile.absolutePath}")
 }

@@ -99,7 +99,7 @@ function Resolve-BuiltApkPath {
 }
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$flutterProjectPath = Join-Path $projectRoot "FHPlayerMobile\\fhplayer_flutter"
+$flutterProjectPath = Join-Path $projectRoot "fhplayer_flutter"
 if (-not (Test-Path $flutterProjectPath)) {
   throw "Flutter project not found: $flutterProjectPath"
 }

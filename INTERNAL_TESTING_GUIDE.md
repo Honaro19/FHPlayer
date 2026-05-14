@@ -6,21 +6,25 @@ This guide documents the repeatable local test flow for FHPlayer development on 
 
 Use this guide before merging larger changes and before creating release artifacts.
 
+## Project structure for Flutter
+
+The shared Flutter app lives in `fhplayer_flutter`.
+Android and Windows are built from the same Flutter project.
+
+- `fhplayer_flutter/`: Flutter app root
+- `fhplayer_flutter/android/`: Android-specific Flutter target and Gradle wrapper
+- `fhplayer_flutter/windows/`: Windows-specific Flutter runner target
+- `scripts/android_flutter/`: Windows PowerShell helpers for building and installing Android APK/AAB artifacts
+
 ## Prerequisites
 
 - Windows PowerShell
-- Python 3.10+
-- Node.js + npm
 - Flutter SDK available at `C:\Dev\flutter` (or adjust commands)
 - Android SDK platform-tools (`adb`) and at least one running emulator for install/launch checks
 
 ## Fast Pre-Check (recommended for every change)
 
 Run from repository root:
-
-```powershell
-.\scripts\test_rule_engine.ps1
-```
 
 ```powershell
 .\scripts\test_flutter.ps1 -Reporter compact
@@ -32,7 +36,6 @@ C:\Dev\flutter\bin\cache\dart-sdk\bin\dart.exe C:\Dev\flutter\bin\cache\flutter_
 
 Expected result:
 
-- Rule tests pass
 - Flutter tests pass
 - `dart analyze` returns no errors
 
@@ -130,10 +133,9 @@ C:\Dev\flutter\bin\cache\dart-sdk\bin\dart.exe C:\Dev\flutter\bin\cache\flutter_
 
 Before pushing changes that touch Flutter or Android:
 
-1. `scripts\test_rule_engine.ps1`
-2. `scripts\test_flutter.ps1 -Reporter compact`
-3. `dart.exe ... flutter_tools.snapshot analyze`
-4. `scripts\smoke_test.ps1 -SkipWindowsInstaller` (or full smoke if release-adjacent)
+1. `scripts\test_flutter.ps1 -Reporter compact`
+2. `dart.exe ... flutter_tools.snapshot analyze`
+3. `scripts\smoke_test.ps1 -SkipWindowsInstaller` (or full smoke if release-adjacent)
 
 ## Result Recording (internal)
 

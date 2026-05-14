@@ -1,6 +1,6 @@
 param(
-    [string]$FlutterExe = ".\.tools\flutter\bin\flutter.bat",
-    [string]$ProjectDir = ".\FHPlayerMobile\fhplayer_flutter",
+    [string]$FlutterExe = "flutter",
+    [string]$ProjectDir = ".\fhplayer_flutter",
     [string[]]$FlutterArgs = @("--no-version-check", "--version"),
     [int]$TimeoutSeconds = 180,
     [string]$LogDir = ".\.tmp\flutter-logs",
@@ -16,10 +16,16 @@ function Resolve-RequiredPath {
     )
 
     $resolved = Resolve-Path -LiteralPath $PathValue -ErrorAction SilentlyContinue
-    if (-not $resolved) {
-        throw "$Label not found: $PathValue"
+    if ($resolved) {
+        return $resolved.Path
     }
-    return $resolved.Path
+
+    $command = Get-Command $PathValue -ErrorAction SilentlyContinue
+    if ($command -and $command.Source) {
+        return [System.IO.Path]::GetFullPath($command.Source)
+    }
+
+    throw "$Label not found: $PathValue"
 }
 
 function Quote-CmdArgument {

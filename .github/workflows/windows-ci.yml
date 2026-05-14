@@ -26,32 +26,20 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
         with:
-          python-version: "3.10"
+          channel: stable
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          package-manager-cache: false
+      - name: Enable Windows desktop
+        shell: pwsh
+        run: flutter config --enable-windows-desktop
 
-      - name: Install Python build dependencies
+      - name: Resolve Flutter dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-build.txt
-
-      - name: Check Python syntax
-        shell: pwsh
-        env:
-          PYTHONPYCACHEPREFIX: .tmp/pythoncache
-        run: python -m py_compile app.py
-
-      - name: Check frontend syntax
-        shell: pwsh
-        run: node --check .\static\playlist-app.js
+          Set-Location .\fhplayer_flutter
+          flutter pub get
 
       - name: Check PowerShell syntax
         shell: pwsh
@@ -60,11 +48,12 @@ jobs:
             '.\build_windows.ps1',
             '.\build_windows_installer.ps1',
             '.\build_windows_release.ps1',
-            '.\FHPlayerMobile\android\build_debug_apk.ps1',
-            '.\FHPlayerMobile\android\install_debug_apk.ps1',
-            '.\FHPlayerMobile\android\build_release_artifacts.ps1',
+            '.\scripts\android_flutter\build_debug_apk.ps1',
+            '.\scripts\android_flutter\install_debug_apk.ps1',
+            '.\scripts\android_flutter\build_release_artifacts.ps1',
+            '.\scripts\test_flutter.ps1',
+            '.\scripts\run_flutter_logged.ps1',
             '.\scripts\smoke_test.ps1',
-            '.\scripts\test_rule_engine.ps1',
             '.\scripts\release_check.ps1'
           )
           foreach ($file in $files) {
@@ -77,11 +66,17 @@ jobs:
             }
           }
 
-      - name: Run rule-engine tests
+      - name: Run Flutter tests
         shell: pwsh
-        run: .\scripts\test_rule_engine.ps1
+        run: .\scripts\test_flutter.ps1 -Reporter compact
 
-      - name: Run desktop and Windows EXE smoke tests
+      - name: Run Flutter analyze
+        shell: pwsh
+        run: |
+          Set-Location .\fhplayer_flutter
+          flutter analyze
+
+      - name: Run Windows smoke tests (without installer and Android)
         shell: pwsh
         env:
           FHPLAYER_NO_PAUSE: "1"

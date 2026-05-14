@@ -78,6 +78,32 @@ function Get-AdbOnlineDevices {
   )
 }
 
+function Get-AdbDeviceStatus {
+  param(
+    [string]$AdbPath,
+    [string]$Serial
+  )
+
+  $lines = & $AdbPath devices
+  if ($LASTEXITCODE -ne 0) {
+    throw "adb devices failed."
+  }
+
+  foreach ($line in ($lines | Select-Object -Skip 1)) {
+    $trimmed = $line.Trim()
+    if (-not $trimmed) {
+      continue
+    }
+
+    $parts = $trimmed -split "\s+"
+    if ($parts.Length -ge 2 -and $parts[0] -eq $Serial) {
+      return $parts[1]
+    }
+  }
+
+  return $null
+}
+
 function Invoke-Adb {
   param(
     [string]$AdbPath,
@@ -90,6 +116,25 @@ function Invoke-Adb {
   } else {
     & $AdbPath @Arguments
   }
+}
+
+function Wait-ForAdbDeviceReady {
+  param(
+    [string]$AdbPath,
+    [string]$Serial,
+    [int]$TimeoutSeconds = 30
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    $status = Get-AdbDeviceStatus -AdbPath $AdbPath -Serial $Serial
+    if ($status -eq "device") {
+      return $true
+    }
+    Start-Sleep -Seconds 1
+  }
+
+  return $false
 }
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
@@ -139,11 +184,34 @@ if (-not $targetDeviceSerial) {
 }
 
 if ($onlineDevices -notcontains $targetDeviceSerial) {
-  throw "The requested adb device '$targetDeviceSerial' is not connected. Online devices: $($onlineDevices -join ', ')"
+  $deviceStatus = Get-AdbDeviceStatus -AdbPath $adbPath -Serial $targetDeviceSerial
+  if (-not $deviceStatus) {
+    throw "The requested adb device '$targetDeviceSerial' is not connected. Online devices: $($onlineDevices -join ', ')"
+  }
 }
 
-Invoke-Adb -AdbPath $adbPath -Serial $targetDeviceSerial -Arguments @("install", "-r", $resolvedApkPath)
-if ($LASTEXITCODE -ne 0) {
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+  if (-not (Wait-ForAdbDeviceReady -AdbPath $adbPath -Serial $targetDeviceSerial -TimeoutSeconds 30)) {
+    Write-Warning "adb device '$targetDeviceSerial' is not ready (attempt $attempt/3). Trying to reconnect."
+    & $adbPath reconnect offline | Out-Null
+    & $adbPath start-server | Out-Null
+    Start-Sleep -Seconds 2
+    continue
+  }
+
+  Invoke-Adb -AdbPath $adbPath -Serial $targetDeviceSerial -Arguments @("install", "-r", $resolvedApkPath)
+  if ($LASTEXITCODE -eq 0) {
+    break
+  }
+
+  if ($attempt -lt 3) {
+    Write-Warning "adb install failed on attempt $attempt/3. Retrying after reconnect."
+    & $adbPath reconnect offline | Out-Null
+    & $adbPath start-server | Out-Null
+    Start-Sleep -Seconds 2
+    continue
+  }
+
   throw "adb install failed."
 }
 

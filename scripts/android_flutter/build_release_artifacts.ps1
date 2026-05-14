@@ -150,7 +150,7 @@ if ($SkipApk -and $SkipBundle) {
 }
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$flutterProjectPath = Join-Path $projectRoot "FHPlayerMobile\\fhplayer_flutter"
+$flutterProjectPath = Join-Path $projectRoot "fhplayer_flutter"
 $flutterAndroidPath = Join-Path $flutterProjectPath "android"
 $appVersion = Get-AppVersion -ProjectRoot $projectRoot
 $appVersionCode = Get-AppVersionCode -AppVersion $appVersion

@@ -6,6 +6,7 @@ param(
   [string]$AndroidSigningMode = "Auto",
   [switch]$SkipSyntaxChecks,
   [switch]$SkipRuleTests,
+  [switch]$SkipFlutterTests,
   [switch]$SkipSmokeTests,
   [switch]$SkipWindowsRelease,
   [switch]$SkipAndroidRelease,
@@ -39,18 +40,6 @@ function Resolve-AbsolutePath {
   }
 
   return [System.IO.Path]::GetFullPath((Join-Path $BasePath $Path))
-}
-
-function Resolve-PythonCommand {
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    return "py"
-  }
-
-  if (Get-Command python -ErrorAction SilentlyContinue) {
-    return "python"
-  }
-
-  throw "Python launcher not found. Install Python 3.10+ first."
 }
 
 function Get-AppVersion {
@@ -137,6 +126,46 @@ function Test-PowerShellSyntax {
   }
 }
 
+function Resolve-FlutterRoot {
+  param([string]$ProjectRoot)
+
+  $candidates = @(
+    $env:FHPLAYER_FLUTTER_ROOT,
+    $env:FLUTTER_ROOT,
+    "C:\\Dev\\flutter"
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+  foreach ($candidate in $candidates) {
+    $resolved = Resolve-AbsolutePath -Path $candidate -BasePath $ProjectRoot
+    $snapshotPath = Join-Path $resolved "bin\\cache\\flutter_tools.snapshot"
+    $dartPath = Join-Path $resolved "bin\\cache\\dart-sdk\\bin\\dart.exe"
+    if ((Test-Path $snapshotPath) -and (Test-Path $dartPath)) {
+      return @{
+        Root = $resolved
+        SnapshotPath = $snapshotPath
+        DartPath = $dartPath
+      }
+    }
+  }
+
+  $flutterCommand = Get-Command flutter -ErrorAction SilentlyContinue
+  if ($flutterCommand) {
+    $flutterExecutable = [System.IO.Path]::GetFullPath($flutterCommand.Source)
+    $flutterRoot = Split-Path -Parent (Split-Path -Parent $flutterExecutable)
+    $snapshotPath = Join-Path $flutterRoot "bin\\cache\\flutter_tools.snapshot"
+    $dartPath = Join-Path $flutterRoot "bin\\cache\\dart-sdk\\bin\\dart.exe"
+    if ((Test-Path $snapshotPath) -and (Test-Path $dartPath)) {
+      return @{
+        Root = $flutterRoot
+        SnapshotPath = $snapshotPath
+        DartPath = $dartPath
+      }
+    }
+  }
+
+  throw "Flutter SDK not found. Set FHPLAYER_FLUTTER_ROOT or FLUTTER_ROOT."
+}
+
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $appVersion = Get-AppVersion -ProjectRoot $projectRoot
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -153,26 +182,17 @@ $androidReleaseOutputDir = Join-Path $releaseCheckRoot "android-release-output"
 $publicReleaseRoot = Join-Path $releaseCheckRoot "public-release\FHPlayer"
 $smokeRoot = Join-Path $releaseCheckRoot "smoke-tests"
 $summary = [System.Collections.Generic.List[string]]::new()
+$skipFlutterValidation = $SkipRuleTests -or $SkipFlutterTests
+
+if ($SkipRuleTests) {
+  Write-Warning "-SkipRuleTests is deprecated and now behaves like -SkipFlutterTests."
+}
 
 New-Item -ItemType Directory -Force -Path $releaseCheckRoot | Out-Null
 
 try {
   if (-not $SkipSyntaxChecks) {
-    Write-Step "Run syntax and parser checks"
-
-    $pythonCommand = Resolve-PythonCommand
-    Invoke-CheckedCommand `
-      -FilePath $pythonCommand `
-      -Arguments @("-m", "py_compile", ".\app.py") `
-      -WorkingDirectory $projectRoot `
-      -Environment @{
-        PYTHONPYCACHEPREFIX = (Join-Path $releaseCheckRoot "pythoncache")
-      }
-
-    Invoke-CheckedCommand `
-      -FilePath "node" `
-      -Arguments @("--check", ".\static\playlist-app.js") `
-      -WorkingDirectory $projectRoot
+    Write-Step "Run script syntax checks"
 
     Test-PowerShellSyntax -Files @(
       ".\build_windows.ps1",
@@ -181,21 +201,30 @@ try {
       ".\scripts\android_flutter\build_debug_apk.ps1",
       ".\scripts\android_flutter\install_debug_apk.ps1",
       ".\scripts\android_flutter\build_release_artifacts.ps1",
+      ".\scripts\test_flutter.ps1",
+      ".\scripts\run_flutter_logged.ps1",
       ".\scripts\smoke_test.ps1",
       ".\scripts\prepare_public_release.ps1",
-      ".\scripts\test_rule_engine.ps1",
       ".\scripts\release_check.ps1"
     )
 
-    $summary.Add("Syntax checks: ok")
+    $summary.Add("Script syntax checks: ok")
   }
 
-  if (-not $SkipRuleTests) {
-    Write-Step "Run rule-engine tests"
+  if (-not $skipFlutterValidation) {
+    Write-Step "Run Flutter tests and analyze"
     Invoke-CheckedCommand `
-      -FilePath (Join-Path $projectRoot "scripts\test_rule_engine.ps1") `
+      -FilePath (Join-Path $projectRoot "scripts\test_flutter.ps1") `
+      -Arguments @("-Reporter", "compact") `
       -WorkingDirectory $projectRoot
-    $summary.Add("Rule-engine tests: ok")
+
+    $flutterTooling = Resolve-FlutterRoot -ProjectRoot $projectRoot
+    Invoke-CheckedCommand `
+      -FilePath $flutterTooling.DartPath `
+      -Arguments @($flutterTooling.SnapshotPath, "analyze") `
+      -WorkingDirectory (Join-Path $projectRoot "fhplayer_flutter")
+
+    $summary.Add("Flutter tests + analyze: ok")
   }
 
   if (-not $SkipSmokeTests) {

@@ -1,39 +1,17 @@
 param(
   [string]$OutputRoot = "",
-  [string]$TempRoot = ""
+  [string]$TempRoot = "",
+  [string]$FlutterRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
 
 function Wait-BeforeExit {
   if (-not $env:FHPLAYER_NO_PAUSE) {
     Write-Host ""
     Read-Host "Press Enter to close"
   }
-}
-
-function Resolve-PythonLauncher {
-  $candidates = @()
-
-  if (Get-Command python -ErrorAction SilentlyContinue) {
-    $candidates += , @("python", "-m", "PyInstaller")
-  }
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    $candidates += , @("py", "-m", "PyInstaller")
-  }
-
-  foreach ($candidate in $candidates) {
-    $versionOutput = & $candidate[0] $candidate[1] $candidate[2] --version 2>&1
-    if ($LASTEXITCODE -eq 0) {
-      return $candidate
-    }
-  }
-
-  if ($candidates.Count -gt 0) {
-    throw "PyInstaller is not installed for any available Python command. Run: python -m pip install -r requirements-build.txt"
-  }
-
-  throw "Python launcher not found. Install Python 3.10+ first."
 }
 
 function Resolve-AbsolutePath {
@@ -53,112 +31,181 @@ function Resolve-AbsolutePath {
   return [System.IO.Path]::GetFullPath((Join-Path $BasePath $Path))
 }
 
-function Normalize-DirectoryPath {
-  param([string]$Path)
+function Get-AppVersion {
+  param([string]$ProjectRoot)
 
-  return ([System.IO.Path]::GetFullPath($Path)).TrimEnd([char[]]@('\', '/'))
-}
-
-try {
-  $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-  $staticDir = Join-Path $projectRoot "static"
-  $staticBundleFiles = @("index.html", "styles.css", "playlist-app.js")
-  $versionPath = Join-Path $projectRoot "VERSION"
-  $brandingScript = Join-Path $projectRoot "assets\\branding\\generate_brand_assets.ps1"
-  $iconPath = Join-Path $projectRoot "assets\\branding\\fhplayer.ico"
-  $buildToken = Get-Date -Format "yyyyMMdd-HHmmss"
-  $resolvedOutputRoot = if ($OutputRoot) { Resolve-AbsolutePath -Path $OutputRoot -BasePath $projectRoot } else { $projectRoot }
-  $resolvedTempRoot = if ($TempRoot) {
-    Resolve-AbsolutePath -Path $TempRoot -BasePath $projectRoot
-  } else {
-    Join-Path $env:TEMP "FHPlayer-PyInstaller-$buildToken"
-  }
-  $distDir = Join-Path $resolvedOutputRoot "dist"
-  $buildDir = Join-Path $resolvedOutputRoot "build"
-  $tempDistDir = Join-Path $resolvedTempRoot "dist"
-  $tempBuildDir = Join-Path $resolvedTempRoot "build"
-  $tempStaticDir = Join-Path $resolvedTempRoot "static"
-  $launcher = Resolve-PythonLauncher
-
-  Write-Host "Building FHPlayer Windows executable..."
-
-  New-Item -ItemType Directory -Path $resolvedTempRoot -Force | Out-Null
-  New-Item -ItemType Directory -Path $tempDistDir -Force | Out-Null
-  New-Item -ItemType Directory -Path $tempBuildDir -Force | Out-Null
-  New-Item -ItemType Directory -Path $tempStaticDir -Force | Out-Null
-  if (-not (Test-Path $staticDir)) {
-    throw "Missing static assets in $staticDir"
-  }
-  foreach ($staticFile in $staticBundleFiles) {
-    $sourcePath = Join-Path $staticDir $staticFile
-    if (-not (Test-Path $sourcePath)) {
-      throw "Missing required static asset at $sourcePath"
-    }
-    Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $tempStaticDir $staticFile) -Force
-  }
-  if ((-not (Test-Path $iconPath)) -and (Test-Path $brandingScript)) {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $brandingScript
-    if ($LASTEXITCODE -ne 0) {
-      throw "Brand asset generation failed."
-    }
-  }
-  if (-not (Test-Path $iconPath)) {
-    Write-Warning "Missing Windows icon asset at $iconPath. The executable will use the default icon."
-  }
+  $versionPath = Join-Path $ProjectRoot "VERSION"
   if (-not (Test-Path $versionPath)) {
     throw "Missing VERSION file at $versionPath"
   }
 
-  & $launcher[0] $launcher[1] $launcher[2] `
-    --noconfirm `
-    --clean `
-    --name FHPlayer `
-    --onedir `
-    --console `
-    --specpath $resolvedTempRoot `
-    --distpath $tempDistDir `
-    --workpath $tempBuildDir `
-    --add-data "${tempStaticDir};static" `
-    --add-data "${versionPath};." `
-    $(if (Test-Path $iconPath) { "--icon"; $iconPath }) `
-    app.py
-
-  if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller build failed."
+  $appVersion = (Get-Content -LiteralPath $versionPath -Raw).Trim()
+  if ($appVersion -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+    throw "VERSION must use major.minor.patch. Found: $appVersion"
   }
 
-  $tempExePath = Join-Path $tempDistDir "FHPlayer\FHPlayer.exe"
-  if (-not (Test-Path $tempExePath)) {
-    throw "Build finished without creating $tempExePath"
+  return $appVersion
+}
+
+function Get-AppVersionCode {
+  param([string]$AppVersion)
+
+  if ($AppVersion -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+    throw "VERSION must use major.minor.patch. Found: $AppVersion"
   }
 
-  $outputRoot = $resolvedOutputRoot
-  $useTempOutputDirectly = (Normalize-DirectoryPath -Path $resolvedOutputRoot) -eq (Normalize-DirectoryPath -Path $resolvedTempRoot)
-  if (-not $useTempOutputDirectly) {
-    try {
-      New-Item -ItemType Directory -Path $resolvedOutputRoot -Force | Out-Null
-      if (Test-Path $distDir) {
-        Remove-Item -LiteralPath $distDir -Recurse -Force
-      }
-      if (Test-Path $buildDir) {
-        Remove-Item -LiteralPath $buildDir -Recurse -Force
-      }
-      Copy-Item -LiteralPath $tempDistDir -Destination $distDir -Recurse -Force
-      Copy-Item -LiteralPath $tempBuildDir -Destination $buildDir -Recurse -Force
-    } catch {
-      Write-Warning "Could not copy build output into $resolvedOutputRoot. Using temp build output at $resolvedTempRoot"
-      $outputRoot = $resolvedTempRoot
+  return ([int]$matches[1] * 10000) + ([int]$matches[2] * 100) + ([int]$matches[3])
+}
+
+function Resolve-FlutterRoot {
+  param([string]$ExplicitRoot)
+
+  $candidates = @(
+    $ExplicitRoot,
+    $env:FHPLAYER_FLUTTER_ROOT,
+    $env:FLUTTER_ROOT,
+    "C:\\Dev\\flutter"
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+
+  foreach ($candidate in $candidates) {
+    $resolved = Resolve-AbsolutePath -Path $candidate -BasePath (Get-Location).Path
+    $snapshotPath = Join-Path $resolved "bin\\cache\\flutter_tools.snapshot"
+    $dartPath = Join-Path $resolved "bin\\cache\\dart-sdk\\bin\\dart.exe"
+    if ((Test-Path $snapshotPath) -and (Test-Path $dartPath)) {
+      return $resolved
     }
-  } else {
-    $outputRoot = $resolvedTempRoot
   }
 
-  $exePath = Join-Path $outputRoot "dist\FHPlayer\FHPlayer.exe"
+  $flutterCommand = Get-Command flutter -ErrorAction SilentlyContinue
+  if ($flutterCommand) {
+    $flutterExecutable = [System.IO.Path]::GetFullPath($flutterCommand.Source)
+    $flutterRoot = Split-Path -Parent (Split-Path -Parent $flutterExecutable)
+    $snapshotPath = Join-Path $flutterRoot "bin\\cache\\flutter_tools.snapshot"
+    $dartPath = Join-Path $flutterRoot "bin\\cache\\dart-sdk\\bin\\dart.exe"
+    if ((Test-Path $snapshotPath) -and (Test-Path $dartPath)) {
+      return $flutterRoot
+    }
+  }
+
+  throw "Flutter SDK not found. Set -FlutterRoot, FHPLAYER_FLUTTER_ROOT, or FLUTTER_ROOT."
+}
+
+function Resolve-WindowsBundlePath {
+  param([string]$FlutterProjectPath)
+
+  $candidates = @(
+    (Join-Path $FlutterProjectPath "build\\windows\\x64\\runner\\Release"),
+    (Join-Path $FlutterProjectPath "build\\windows\\runner\\Release")
+  )
+
+  foreach ($candidate in $candidates) {
+    if ((Test-Path $candidate) -and (Test-Path (Join-Path $candidate "FHPlayer.exe"))) {
+      return $candidate
+    }
+  }
+
+  foreach ($candidate in $candidates) {
+    if (Test-Path $candidate) {
+      $fallbackExe = Get-ChildItem -Path $candidate -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike "*unins*.exe" } |
+        Select-Object -First 1
+      if ($fallbackExe) {
+        return $candidate
+      }
+    }
+  }
+
+  throw "Flutter build finished, but no Windows release bundle was found."
+}
+
+function Reset-StaleWindowsBuildCache {
+  param([string]$FlutterProjectPath)
+
+  $windowsBuildDir = Join-Path $FlutterProjectPath "build\\windows"
+  if (-not (Test-Path $windowsBuildDir)) {
+    return
+  }
+
+  # The project location changed and stale CMake cache entries may still reference old absolute paths.
+  # Old CMake cache entries can keep absolute source paths and break subsequent builds.
+  Remove-Item -LiteralPath $windowsBuildDir -Recurse -Force
+}
+
+try {
+  $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+  $flutterProjectPath = Join-Path $projectRoot "fhplayer_flutter"
+  if (-not (Test-Path $flutterProjectPath)) {
+    throw "Flutter project not found: $flutterProjectPath"
+  }
+
+  $appVersion = Get-AppVersion -ProjectRoot $projectRoot
+  $appVersionCode = Get-AppVersionCode -AppVersion $appVersion
+  $resolvedOutputRoot = if ($OutputRoot) {
+    Resolve-AbsolutePath -Path $OutputRoot -BasePath $projectRoot
+  } else {
+    $projectRoot
+  }
+  $resolvedFlutterRoot = Resolve-FlutterRoot -ExplicitRoot $FlutterRoot
+
+  $distDir = Join-Path $resolvedOutputRoot "dist"
+  $distAppDir = Join-Path $distDir "FHPlayer"
+
+  New-Item -ItemType Directory -Force -Path $resolvedOutputRoot, $distDir | Out-Null
+
+  $dartPath = Join-Path $resolvedFlutterRoot "bin\\cache\\dart-sdk\\bin\\dart.exe"
+  $snapshotPath = Join-Path $resolvedFlutterRoot "bin\\cache\\flutter_tools.snapshot"
+  $arguments = @(
+    $snapshotPath,
+    "build",
+    "windows",
+    "--release",
+    "--no-pub",
+    "--build-name",
+    $appVersion,
+    "--build-number",
+    "$appVersionCode"
+  )
+
+  $env:FLUTTER_SUPPRESS_ANALYTICS = "true"
+  $env:DART_SUPPRESS_ANALYTICS = "true"
+
+  Reset-StaleWindowsBuildCache -FlutterProjectPath $flutterProjectPath
+
+  Push-Location $flutterProjectPath
+  try {
+    & $dartPath @arguments
+    if ($LASTEXITCODE -ne 0) {
+      exit $LASTEXITCODE
+    }
+  } finally {
+    Pop-Location
+  }
+
+  $bundlePath = Resolve-WindowsBundlePath -FlutterProjectPath $flutterProjectPath
+  if (Test-Path $distAppDir) {
+    Remove-Item -LiteralPath $distAppDir -Recurse -Force
+  }
+  Copy-Item -LiteralPath $bundlePath -Destination $distAppDir -Recurse -Force
+
+  $exePath = Join-Path $distAppDir "FHPlayer.exe"
+  if (-not (Test-Path $exePath)) {
+    $fallbackExe = Get-ChildItem -Path $distAppDir -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -notlike "*unins*.exe" } |
+      Select-Object -First 1
+    if (-not $fallbackExe) {
+      throw "Missing Windows executable in $distAppDir"
+    }
+    if (-not [string]::Equals($fallbackExe.Name, "FHPlayer.exe", [System.StringComparison]::OrdinalIgnoreCase)) {
+      Move-Item -LiteralPath $fallbackExe.FullName -Destination $exePath -Force
+    }
+  }
 
   Write-Host ""
-  Write-Host "Build finished."
+  Write-Host "Flutter Windows build finished."
+  Write-Host "Version: $appVersion"
+  Write-Host "Bundle source: $bundlePath"
+  Write-Host "Output: $distAppDir"
   Write-Host "Executable: $exePath"
-  Write-Host "To start without auto-opening the browser, set FHPLAYER_NO_BROWSER=1 before launch."
 } catch {
   Write-Error $_
   exit 1

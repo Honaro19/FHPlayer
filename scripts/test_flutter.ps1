@@ -1,6 +1,6 @@
 param(
-    [string]$FlutterExe = ".\.tools\flutter\bin\flutter.bat",
-    [string]$ProjectDir = ".\FHPlayerMobile\fhplayer_flutter",
+    [string]$FlutterExe = "flutter",
+    [string]$ProjectDir = ".\fhplayer_flutter",
     [string]$TestPath = "",
     [string]$Reporter = "compact",
     [switch]$AllowPub,
