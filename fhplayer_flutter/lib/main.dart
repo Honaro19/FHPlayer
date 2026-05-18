@@ -886,8 +886,19 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
         return '${localAppData.trim()}\\FHPlayer';
       }
     }
-    final String home = Platform.environment['HOME'] ?? '.';
-    return '$home/.fhplayer';
+    if (Platform.isAndroid || Platform.isIOS) {
+      try {
+        final String basePath = Directory.systemTemp.parent.path;
+        return '$basePath${Platform.pathSeparator}.fhplayer';
+      } catch (_) {
+        return '${Directory.systemTemp.path}${Platform.pathSeparator}.fhplayer';
+      }
+    }
+    final String? home = Platform.environment['HOME'];
+    if (home != null && home.trim().isNotEmpty) {
+      return '${home.trim()}${Platform.pathSeparator}.fhplayer';
+    }
+    return '${Directory.systemTemp.path}${Platform.pathSeparator}.fhplayer';
   }
 
   String get _libraryRootPath =>
@@ -6720,59 +6731,83 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
                   fit: StackFit.expand,
                   children: <Widget>[
                     Center(
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: <Widget>[
-                          _buildOverlayTextButton(
-                            tooltip: 'Back 10 seconds',
-                            label: '-10s',
-                            size: 56,
-                            onPressed: canPlay
-                                ? () {
-                                    _showPlayerControls(autoHide: true);
-                                    _seekBy(const Duration(seconds: -10));
-                                  }
-                                : null,
-                          ),
-                          const SizedBox(width: 14),
-                          _buildOverlayIconButton(
-                            tooltip: isPlaying ? 'Pause' : 'Play',
-                            icon: isPlaying ? Icons.pause : Icons.play_arrow,
-                            size: 68,
-                            accent: true,
-                            onPressed: canPlay ? _togglePlayback : null,
-                          ),
-                          const SizedBox(width: 14),
-                          _buildOverlayTextButton(
-                            tooltip: 'Forward 10 seconds',
-                            label: '+10s',
-                            size: 56,
-                            onPressed: canPlay
-                                ? () {
-                                    _showPlayerControls(autoHide: true);
-                                    _seekBy(const Duration(seconds: 10));
-                                  }
-                                : null,
-                          ),
-                        ],
+                      child: LayoutBuilder(
+                        builder:
+                            (BuildContext context, BoxConstraints constraints) {
+                              final bool ultraCompact =
+                                  constraints.maxWidth < 240;
+                              final double skipSize = ultraCompact ? 46 : 56;
+                              final double playSize = ultraCompact ? 58 : 68;
+                              final double gap = ultraCompact ? 8 : 14;
+
+                              return FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    _buildOverlayTextButton(
+                                      tooltip: 'Back 10 seconds',
+                                      label: '-10s',
+                                      size: skipSize,
+                                      onPressed: canPlay
+                                          ? () {
+                                              _showPlayerControls(
+                                                autoHide: true,
+                                              );
+                                              _seekBy(
+                                                const Duration(seconds: -10),
+                                              );
+                                            }
+                                          : null,
+                                    ),
+                                    SizedBox(width: gap),
+                                    _buildOverlayIconButton(
+                                      tooltip: isPlaying ? 'Pause' : 'Play',
+                                      icon: isPlaying
+                                          ? Icons.pause
+                                          : Icons.play_arrow,
+                                      size: playSize,
+                                      accent: true,
+                                      onPressed: canPlay
+                                          ? _togglePlayback
+                                          : null,
+                                    ),
+                                    SizedBox(width: gap),
+                                    _buildOverlayTextButton(
+                                      tooltip: 'Forward 10 seconds',
+                                      label: '+10s',
+                                      size: skipSize,
+                                      onPressed: canPlay
+                                          ? () {
+                                              _showPlayerControls(
+                                                autoHide: true,
+                                              );
+                                              _seekBy(
+                                                const Duration(seconds: 10),
+                                              );
+                                            }
+                                          : null,
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
                       ),
                     ),
-                    if (_lovenseLiveEnabled)
+                    if (_lovenseLiveEnabled && _hasLoadedEntry && canPlay)
                       Positioned(
                         top: 14,
                         right: 14,
                         child: FilledButton(
-                          onPressed: canPlay
-                              ? () {
-                                  _sendLovenseStop(
-                                    'Emergency stop: video paused and Lovense stop sent.',
-                                    _displayPositionMs,
-                                  );
-                                  if (isPlaying) {
-                                    _togglePlayback();
-                                  }
-                                }
-                              : null,
+                          onPressed: () {
+                            _sendLovenseStop(
+                              'Emergency stop: video paused and Lovense stop sent.',
+                              _displayPositionMs,
+                            );
+                            if (isPlaying) {
+                              _togglePlayback();
+                            }
+                          },
                           style: FilledButton.styleFrom(
                             backgroundColor: AppColors.danger,
                             foregroundColor: Colors.white,
@@ -6891,61 +6926,179 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
       child: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
           final bool compact = constraints.maxWidth < 560;
-          final double timeWidth = compact ? 74 : 88;
+          final bool stacked = constraints.maxWidth < 430;
+          final double timeWidth = compact ? 64 : 88;
           final double volumeSliderWidth = compact
-              ? 120
+              ? 104
               : (constraints.maxWidth * 0.18).clamp(140.0, 240.0).toDouble();
+
+          Widget buildControlIcon({
+            required String tooltip,
+            required IconData icon,
+            required VoidCallback? onPressed,
+          }) {
+            return IconButton(
+              tooltip: tooltip,
+              onPressed: onPressed,
+              icon: Icon(icon),
+              color: const Color(0xDDFFF8EF),
+              disabledColor: const Color(0x66FFF8EF),
+              padding: EdgeInsets.zero,
+              iconSize: stacked ? 22 : 24,
+              visualDensity: stacked
+                  ? VisualDensity.compact
+                  : VisualDensity.standard,
+              constraints: stacked
+                  ? const BoxConstraints(minWidth: 40, minHeight: 40)
+                  : const BoxConstraints(minWidth: 48, minHeight: 48),
+            );
+          }
+
+          final Widget previousButton = buildControlIcon(
+            tooltip: 'Previous playlist entry',
+            icon: Icons.skip_previous,
+            onPressed: _playlistEntries.isEmpty
+                ? null
+                : () {
+                    unawaited(_loadPreviousPlaylistEntry());
+                  },
+          );
+          final Widget nextButton = buildControlIcon(
+            tooltip: 'Next playlist entry',
+            icon: Icons.skip_next,
+            onPressed: _playlistEntries.isEmpty
+                ? null
+                : () {
+                    unawaited(_loadNextPlaylistEntry());
+                  },
+          );
+          final Widget muteButton = buildControlIcon(
+            tooltip: _playerVolume <= 0 ? 'Unmute' : 'Mute',
+            icon: _playerVolumeIcon,
+            onPressed: _hasInitializedVideo ? _togglePlayerMute : null,
+          );
+          final Widget fullscreenButton = buildControlIcon(
+            tooltip: _fullscreenPlayerVisible
+                ? 'Exit fullscreen'
+                : 'Fullscreen',
+            icon: _fullscreenPlayerVisible
+                ? Icons.fullscreen_exit
+                : Icons.fullscreen,
+            onPressed: _hasInitializedVideo
+                ? () => _toggleFullscreenPlayer()
+                : null,
+          );
+
+          Widget buildSeekSlider() {
+            return Expanded(
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  activeTrackColor: AppColors.accent,
+                  inactiveTrackColor: const Color(0x66FFF8EF),
+                  thumbColor: AppColors.accent,
+                  overlayColor: AppColors.accentSoft.withValues(alpha: 0.20),
+                ),
+                child: Slider(
+                  min: 0,
+                  max: sliderMax,
+                  value: sliderValue,
+                  onChanged: canPlay
+                      ? (double value) {
+                          _showPlayerControls(autoHide: false);
+                          setState(() {
+                            _previewSeekMs = value.round();
+                            _pendingSeekSync = true;
+                            _syncActionCursor(
+                              _previewSeekMs!,
+                              includeCurrentAction: true,
+                            );
+                          });
+                        }
+                      : null,
+                  onChangeEnd: canPlay
+                      ? (double value) {
+                          _showPlayerControls(autoHide: true);
+                          _seekTo(Duration(milliseconds: value.round()));
+                        }
+                      : null,
+                ),
+              ),
+            );
+          }
+
+          Widget buildVolumeSlider(double width) {
+            return SizedBox(
+              width: width,
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  activeTrackColor: AppColors.accent,
+                  inactiveTrackColor: const Color(0x66FFF8EF),
+                  thumbColor: AppColors.accent,
+                  overlayColor: AppColors.accentSoft.withValues(alpha: 0.20),
+                ),
+                child: Slider(
+                  min: 0,
+                  max: 1,
+                  value: _playerVolume,
+                  onChanged: _hasInitializedVideo
+                      ? (double value) {
+                          _showPlayerControls(autoHide: false);
+                          _setPlayerVolume(value);
+                        }
+                      : null,
+                  onChangeEnd: _hasInitializedVideo
+                      ? (_) => _showPlayerControls(autoHide: true)
+                      : null,
+                ),
+              ),
+            );
+          }
+
+          if (stacked) {
+            return Column(
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    SizedBox(
+                      width: timeWidth,
+                      child: Text(
+                        formatMs(displayPositionMs),
+                        style: timeStyle,
+                      ),
+                    ),
+                    buildSeekSlider(),
+                    SizedBox(
+                      width: timeWidth,
+                      child: Text(
+                        formatDuration(_videoDuration),
+                        textAlign: TextAlign.right,
+                        style: timeStyle,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: <Widget>[
+                    previousButton,
+                    muteButton,
+                    Expanded(child: buildVolumeSlider(double.infinity)),
+                    fullscreenButton,
+                    nextButton,
+                  ],
+                ),
+              ],
+            );
+          }
+
           return Row(
             children: <Widget>[
-              IconButton(
-                tooltip: 'Previous playlist entry',
-                onPressed: _playlistEntries.isEmpty
-                    ? null
-                    : () {
-                        unawaited(_loadPreviousPlaylistEntry());
-                      },
-                icon: const Icon(Icons.skip_previous),
-                color: const Color(0xDDFFF8EF),
-                disabledColor: const Color(0x66FFF8EF),
-              ),
+              previousButton,
               SizedBox(
                 width: timeWidth,
                 child: Text(formatMs(displayPositionMs), style: timeStyle),
               ),
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: AppColors.accent,
-                    inactiveTrackColor: const Color(0x66FFF8EF),
-                    thumbColor: AppColors.accent,
-                    overlayColor: AppColors.accentSoft.withValues(alpha: 0.20),
-                  ),
-                  child: Slider(
-                    min: 0,
-                    max: sliderMax,
-                    value: sliderValue,
-                    onChanged: canPlay
-                        ? (double value) {
-                            _showPlayerControls(autoHide: false);
-                            setState(() {
-                              _previewSeekMs = value.round();
-                              _pendingSeekSync = true;
-                              _syncActionCursor(
-                                _previewSeekMs!,
-                                includeCurrentAction: true,
-                              );
-                            });
-                          }
-                        : null,
-                    onChangeEnd: canPlay
-                        ? (double value) {
-                            _showPlayerControls(autoHide: true);
-                            _seekTo(Duration(milliseconds: value.round()));
-                          }
-                        : null,
-                  ),
-                ),
-              ),
+              buildSeekSlider(),
               SizedBox(
                 width: timeWidth,
                 child: Text(
@@ -6955,65 +7108,11 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
                 ),
               ),
               const SizedBox(width: 8),
-              IconButton(
-                tooltip: _playerVolume <= 0 ? 'Unmute' : 'Mute',
-                onPressed: _hasInitializedVideo ? _togglePlayerMute : null,
-                icon: Icon(_playerVolumeIcon),
-                color: const Color(0xDDFFF8EF),
-                disabledColor: const Color(0x66FFF8EF),
-              ),
-              SizedBox(
-                width: volumeSliderWidth,
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: AppColors.accent,
-                    inactiveTrackColor: const Color(0x66FFF8EF),
-                    thumbColor: AppColors.accent,
-                    overlayColor: AppColors.accentSoft.withValues(alpha: 0.20),
-                  ),
-                  child: Slider(
-                    min: 0,
-                    max: 1,
-                    value: _playerVolume,
-                    onChanged: _hasInitializedVideo
-                        ? (double value) {
-                            _showPlayerControls(autoHide: false);
-                            _setPlayerVolume(value);
-                          }
-                        : null,
-                    onChangeEnd: _hasInitializedVideo
-                        ? (_) => _showPlayerControls(autoHide: true)
-                        : null,
-                  ),
-                ),
-              ),
+              muteButton,
+              buildVolumeSlider(volumeSliderWidth),
               const SizedBox(width: 2),
-              IconButton(
-                tooltip: _fullscreenPlayerVisible
-                    ? 'Exit fullscreen'
-                    : 'Fullscreen',
-                onPressed: _hasInitializedVideo
-                    ? () => _toggleFullscreenPlayer()
-                    : null,
-                icon: Icon(
-                  _fullscreenPlayerVisible
-                      ? Icons.fullscreen_exit
-                      : Icons.fullscreen,
-                ),
-                color: const Color(0xDDFFF8EF),
-                disabledColor: const Color(0x66FFF8EF),
-              ),
-              IconButton(
-                tooltip: 'Next playlist entry',
-                onPressed: _playlistEntries.isEmpty
-                    ? null
-                    : () {
-                        unawaited(_loadNextPlaylistEntry());
-                      },
-                icon: const Icon(Icons.skip_next),
-                color: const Color(0xDDFFF8EF),
-                disabledColor: const Color(0x66FFF8EF),
-              ),
+              fullscreenButton,
+              nextButton,
             ],
           );
         },
