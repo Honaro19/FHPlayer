@@ -1,9 +1,0 @@
-{
-  "name": "fhplayer",
-  "private": true,
-  "scripts": {
-    "test": "npm run test:rules && npm run test:update-manifest",
-    "test:rules": "node tests/lovense-rules.test.js",
-    "test:update-manifest": "python -m unittest tests.test_update_manifest"
-  }
-}

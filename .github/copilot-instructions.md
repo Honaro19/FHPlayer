@@ -9,22 +9,23 @@
 
 ## Code Style
 
-- **Python**: Follow PEP 8 conventions
-- **JavaScript**: Use consistent formatting (see static/ files for current style)
+- **Dart/Flutter**: Follow standard Flutter formatting and linting
+- **PowerShell**: Keep scripts strict, explicit, and readable
 - **Comments**: Use English for all explanatory comments and docstrings
 
 ## Architecture
 
 The project consists of:
-- **Backend**: `app.py` (Python Flask/similar application)
-- **Frontend**: HTML/CSS/JS in `static/` directory (index.html, styles.css, app.js, playlist-app.js)
-- **Build**: Windows build scripts and PyInstaller configuration (FHPlayer.spec)
+- **App**: `fhplayer_flutter/` shared Flutter app for Windows and Android
+- **Build**: Windows and Android PowerShell build/release scripts
+- **Release**: Local release preparation scripts under `scripts/` and `release/`
 
 ## Build and Test
 
 - **Build Windows**: `./build_windows.ps1` or `./build_windows.cmd`
-- **Run locally**: `python app.py`
-- **Dependencies**: See `requirements-build.txt` and project requirements
+- **Run locally (Windows)**: `Set-Location fhplayer_flutter; flutter run -d windows`
+- **Run tests**: `./scripts/test_flutter.ps1`
+- **Analyze**: `Set-Location fhplayer_flutter; flutter analyze`
 
 ## When Suggesting Changes
 

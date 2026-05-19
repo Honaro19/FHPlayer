@@ -1,6 +1,6 @@
 # FHPlayer
 
-FHPlayer is a local video player that plays videos in the browser and triggers Lovense actions at the timestamps defined in `funscript` files. Multiple video/funscript pairs can be loaded as a playlist and played sequentially or randomly.
+FHPlayer is a local Flutter video player for Windows and Android that triggers Lovense actions at the timestamps defined in `funscript` files. Multiple video/funscript pairs can be loaded as a playlist and played sequentially or randomly.
 
 FHPlayer is a private project and is not intended for production use.
 
@@ -29,13 +29,12 @@ Before using this software, it is recommended to back up important data.
 
 ## Start
 
-Requirement: Python 3.10 or newer
+Requirement: Flutter SDK
 
 ```powershell
-python app.py
+Set-Location .\fhplayer_flutter
+flutter run -d windows
 ```
-
-After that, the app is available at `http://127.0.0.1:8765`. The browser opens automatically by default.
 
 The project version is defined centrally in `VERSION`.
 
@@ -48,8 +47,8 @@ On startup FHPlayer creates a managed library under:
 
 ### Desktop
 
-1. Start FHPlayer with `python app.py` or the built Windows executable.
-2. Wait for the browser window to open at `http://127.0.0.1:8765`.
+1. Start FHPlayer with `flutter run -d windows` or the built Windows executable.
+2. Wait for the Flutter window to open.
 3. Select one or more video files.
 4. Select the matching `.funscript` or `.json` files.
 5. Configure `Lovense live` or `Lovense test`.
@@ -98,11 +97,11 @@ The UI opens the public GitHub releases page, or the specific release page retur
 
 Custom manifest feeds are still supported. The manifest contract is versioned explicitly and the current app expects `schema_version: 1` for non-GitHub feeds.
 
-On desktop you can still override that feed URL for testing or custom hosting:
+On Windows you can still override that feed URL for testing or custom hosting:
 
 ```powershell
 $env:FHPLAYER_UPDATE_FEED_URL = "https://example.com/update_manifest.json"
-python app.py
+flutter run -d windows
 ```
 
 The update preference and the last result are stored locally:
@@ -159,8 +158,8 @@ Run the consolidated release verification with:
 
 That combines:
 
-- Python, JavaScript, and PowerShell syntax checks
-- rule-engine tests
+- PowerShell syntax checks
+- Flutter tests + `dart analyze`
 - the full smoke test runner
 - Windows release installer build verification
 - Android release APK and AAB build verification
@@ -175,21 +174,15 @@ Useful options:
 
 ## Windows EXE
 
-You can package FHPlayer as a Windows `.exe` with PyInstaller.
+You can package FHPlayer as a Windows `.exe` from the Flutter Windows target.
 
-Install the build dependency:
-
-```powershell
-pip install -r requirements-build.txt
-```
-
-Create the executable:
+Create the executable bundle:
 
 ```powershell
 .\build_windows.ps1
 ```
 
-Or send the generated `dist\` and `build\` folders somewhere else:
+Or send the generated `dist\` folder somewhere else:
 
 ```powershell
 .\build_windows.ps1 -OutputRoot .tmp\windows-build -TempRoot .tmp\windows-temp
@@ -202,7 +195,6 @@ build_windows.cmd
 ```
 
 The result is written to `dist\FHPlayer\FHPlayer.exe`.
-If copying the finished build back into the project folder fails, the script keeps the working output in `%TEMP%\FHPlayer-PyInstaller-<timestamp>\dist\FHPlayer\FHPlayer.exe`.
 
 The Windows build now also uses `assets\branding\fhplayer.ico`. If that icon file does not exist yet, `build_windows.ps1` generates a branded placeholder icon automatically.
 
@@ -302,28 +294,30 @@ Useful options:
 - `-ReleaseNotesPath .\path\to\notes.txt` to load release notes from a text file
 - `-CleanVersionDirectories` to rebuild the versioned Windows and Android output folders from scratch
 
-## Mobile Version
+## Flutter App (Android + Windows)
 
-FHPlayer now includes an Android app target in `FHPlayerMobile/android`.
+FHPlayer includes a shared Flutter app in `fhplayer_flutter`.
+Android and Windows are built from the same Flutter project. A split into
+separate `FHPlayerAndroid`/`FHPlayerWindows` app roots is intentionally not
+used.
 
-The Android build wraps the existing browser UI inside a native `WebView` app and starts a small embedded local HTTP server for the static files plus the Lovense API bridge. File selection uses the native Android document picker.
+The current Flutter structure is:
+
+- `fhplayer_flutter/`: Flutter app root (shared code + platform targets)
+- `fhplayer_flutter/android/`: Android Flutter target and Gradle files
+- `fhplayer_flutter/windows/`: Windows Flutter runner target
+- `scripts/android_flutter/`: Windows PowerShell helpers for Android APK/AAB build and install
 
 Build the debug APK with:
 
 ```powershell
-FHPlayerMobile\android\build_debug_apk.ps1
+scripts\android_flutter\build_debug_apk.ps1
 ```
 
-To write the Gradle build output somewhere else:
+To write the output APK somewhere else:
 
 ```powershell
-FHPlayerMobile\android\build_debug_apk.ps1 -BuildDir .tmp\android-build\app -OutputDir .tmp\android-output
-```
-
-Or with double-click / Command Prompt:
-
-```cmd
-FHPlayerMobile\android\build_debug_apk.cmd
+scripts\android_flutter\build_debug_apk.ps1 -OutputDir .tmp\android-output
 ```
 
 The APK is written to:
@@ -335,24 +329,18 @@ installers\android\FHPlayer-<version>-debug.apk
 Install the APK onto a connected emulator or Android device with:
 
 ```powershell
-FHPlayerMobile\android\install_debug_apk.ps1 -LaunchApp
+scripts\android_flutter\install_debug_apk.ps1 -LaunchApp
 ```
 
-If you built the APK into a custom directory, pass the same build path during install:
+If you built the APK into a custom output directory, pass that APK path during install:
 
 ```powershell
-FHPlayerMobile\android\install_debug_apk.ps1 -ApkPath .tmp\android-output\FHPlayer-<version>-debug.apk -LaunchApp
-```
-
-Or with double-click / Command Prompt:
-
-```cmd
-FHPlayerMobile\android\install_debug_apk.cmd
+scripts\android_flutter\install_debug_apk.ps1 -ApkPath .tmp\android-output\FHPlayer-<version>-debug.apk -LaunchApp
 ```
 
 Current Android limitations:
 
-- `Lovense live` and `Lovense test` remain available through the embedded backend.
+- `Lovense live` and `Lovense test` are available in the Flutter app.
 - Video and `.funscript` pairing still works once both files are selected, but Android does not automatically scan sibling files from the filesystem by filename.
 - The Android installer artifact is the APK itself. For a distributable release build, add a release keystore and build a signed release APK.
 - On first app start FHPlayer creates the managed `Library\Videos`, `Library\Funscripts`, and `Library\Exports` folders inside the app storage area.
@@ -362,7 +350,7 @@ Current Android limitations:
 Build release artifacts with:
 
 ```powershell
-FHPlayerMobile\android\build_release_artifacts.ps1
+scripts\android_flutter\build_release_artifacts.ps1
 ```
 
 That produces:
@@ -374,7 +362,7 @@ installers\android\FHPlayer-<version>.aab
 
 If no signing configuration is present, the script builds unsigned release artifacts by default and tells you so.
 
-To require signing, copy `FHPlayerMobile\android\release-signing.example.properties` to `FHPlayerMobile\android\release-signing.properties` and fill in the real values, or provide the same values through environment variables:
+To require signing, copy `fhplayer_flutter\android\release-signing.example.properties` to `fhplayer_flutter\android\release-signing.properties` and fill in the real values, or provide the same values through environment variables:
 
 - `FHPLAYER_ANDROID_KEYSTORE_PATH`
 - `FHPLAYER_ANDROID_KEYSTORE_PASSWORD`
@@ -384,16 +372,21 @@ To require signing, copy `FHPlayerMobile\android\release-signing.example.propert
 Then build with:
 
 ```powershell
-FHPlayerMobile\android\build_release_artifacts.ps1 -SigningMode Require
+scripts\android_flutter\build_release_artifacts.ps1 -SigningMode Require
 ```
 
 Useful options:
 
 - `-SkipApk`
 - `-SkipBundle`
-- `-BuildDir .tmp\android-release-build\app`
 - `-OutputDir .tmp\android-release-output`
-- `-SigningPropertiesPath .\FHPlayerMobile\android\release-signing.properties`
+- `-SigningPropertiesPath .\fhplayer_flutter\android\release-signing.properties`
+
+## Internal Testing Guide
+
+For the full internal Windows testing flow (fast checks, Flutter hang troubleshooting, and Android emulator validation), see:
+
+- `INTERNAL_TESTING_GUIDE.md`
 
 ## Smoke Tests
 
@@ -403,7 +396,7 @@ Run the reusable smoke-test runner with:
 .\scripts\smoke_test.ps1
 ```
 
-By default it tests the desktop Python app, the built Windows EXE, the Windows installer, and the Android APK build. When exactly one adb device or emulator is connected, it also installs and launches the Android app.
+By default it tests the built Windows EXE, the Windows installer, and the Android APK build. When exactly one adb device or emulator is connected, it also installs and launches the Android app.
 
 Useful options:
 
@@ -413,19 +406,44 @@ Useful options:
 - `-AndroidDeviceSerial emulator-5554`
 - `-KeepArtifacts`
 
-## Rule Tests
+## Flutter Tests
 
-Run the Lovense rule-engine tests with:
-
-```powershell
-.\scripts\test_rule_engine.ps1
-```
-
-Or directly with npm:
+Run Flutter tests through the logged wrapper:
 
 ```powershell
-npm run test:rules
+.\scripts\test_flutter.ps1
 ```
+
+Run only one Flutter test file:
+
+```powershell
+.\scripts\test_flutter.ps1 -TestPath test\lovense_mock_test.dart
+```
+
+Useful options:
+
+- `-TimeoutSeconds 900` for slower machines
+- `-AllowPub` to allow `pub get` during the test run
+- `-Reporter compact|expanded|json`
+- `-ExtraFlutterArgs '--plain-name','My test name'`
+
+The script writes logs to:
+
+- `.tmp\flutter-logs\*.out.log`
+- `.tmp\flutter-logs\*.err.log`
+- `.tmp\flutter-logs\*.meta.log`
+
+Common failure signatures and meaning:
+
+- `PathAccessException: Cannot copy ... build\unit_test_assets\NativeAssetsManifest.json ... Access denied`
+  - The execution context cannot overwrite/delete files under `build\unit_test_assets`.
+  - Re-run outside restrictive sandbox environments.
+- `Flutter failed to run "git ...". The flutter tool cannot access the file or directory.`
+  - The execution context cannot run required subprocesses (for example `git`) with sufficient access.
+  - Re-run outside restrictive sandbox environments.
+- `dart`/`flutter` appears to hang without output in Codex.
+  - In this repository, sandboxed execution can block Dart/Flutter launcher behavior.
+  - Re-run the same command outside sandbox restrictions (elevated/out-of-sandbox execution).
 
 ## Daily Use
 
@@ -473,9 +491,8 @@ Saved playlists keep the video and funscript source paths, global Lovense users/
 - Review the live rule validation status before starting playback.
 - If the player overlay shows `RESUME`, click it to continue Lovense live execution after an emergency stop.
 
-### The app starts but the browser UI does not load correctly
+### The app starts but the UI does not load correctly
 
-- Verify that `http://127.0.0.1:8765/api/health` responds.
 - Check the Diagnostics panel or `%LOCALAPPDATA%\FHPlayer\Logs\fhplayer.log` on desktop.
 - Run `.\scripts\smoke_test.ps1` or `.\scripts\release_check.ps1 -SkipAndroidInstall` if you want a full local verification pass.
 

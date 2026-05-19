@@ -1,5 +1,6 @@
 __pycache__/
 .tmp/
+.tools/
 *.py[cod]
 build/
 dist/
@@ -9,13 +10,10 @@ installers/android/*.apk
 installers/android/*.aab
 installers/windows/FHPlayer-Setup.exe
 installers/windows/FHPlayer-*-Setup.exe
-FHPlayerMobile/node_modules/
-FHPlayerMobile/android/.gradle/
-FHPlayerMobile/android/app/build/
-FHPlayerMobile/android/local.properties
-FHPlayerMobile/android/release-signing.properties
-FHPlayerMobile/android/*.jks
-FHPlayerMobile/android/*.keystore
+fhplayer_flutter/android/local.properties
+fhplayer_flutter/android/release-signing.properties
+fhplayer_flutter/android/*.jks
+fhplayer_flutter/android/*.keystore
 installers/windows-portable/
 installers/windows-portable-*/
 .git-acl-backup.txt
