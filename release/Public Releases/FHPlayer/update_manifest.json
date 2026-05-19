@@ -1,31 +1,31 @@
 {
-  "schema_version": 1,
-  "app": "FHPlayer",
-  "latest_version": "0.1.2",
-  "release_notes": [
-    "Added Library playlist saving with editable names and automatic replacement of renamed Library playlists.",
-    "Moved playlist actions into the Playlist area and added Library delete flows for videos, funscripts, and playlists.",
-    "Improved loading saved playlists when referenced video or funscript paths are missing.",
-    "Fixed Android Library playlist loading crashes caused by interrupted local file streams."
-  ],
-  "platforms": {
-    "windows": {
-      "folder_url": "https://github.com/Honaro19/FHPlayer/releases",
-      "installer_url": "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2-Setup.exe",
-      "portable_url": "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-Portable-0.1.2.zip",
-      "sha256": {
-        "installer": "3eb4c440fe3c4a163b72f357391d112d9eeb5dbcb7ceacdee3a6a5a16a7b621d",
-        "portable": "61919e2c5c3fad0bc1920231b81a5473ee7b01146f7cd38ce5bf84f59f8a94e7"
-      }
-    },
-    "android": {
-      "folder_url": "https://github.com/Honaro19/FHPlayer/releases",
-      "apk_url": "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2.apk",
-      "aab_url": "https://github.com/Honaro19/FHPlayer/releases/latest/download/FHPlayer-0.1.2.aab",
-      "sha256": {
-        "apk": "608d3945cba3c6c4ae13e4e54b5465d2e4748ce2a4fa52dc931236e15fa4815f",
-        "aab": "6815f41ecd73209bfe570f0c35d3070b4676c2c42b93dad0b6a84d87931f0c8e"
-      }
-    }
-  }
+    "schema_version":  1,
+    "app":  "FHPlayer",
+    "latest_version":  "0.1.3",
+    "release_notes":  [
+                          "Added burst rule helpers: burstcount, burststart, burstduration, burstmember, burstindex.",
+                          "Improved rule editor with fullscreen mode, resizable area, and visible line numbers.",
+                          "Fixed fullscreen player border artifacts after maximize on Windows.",
+                          "Unified Flutter rule editor behavior for Windows and Android builds."
+                      ],
+    "platforms":  {
+                      "windows":  {
+                                      "folder_url":  "https://github.com/Honaro19/FHPlayer/releases",
+                                      "installer_url":  null,
+                                      "portable_url":  null,
+                                      "sha256":  {
+                                                     "installer":  "7dfc921eef654af537825c0060ced82d3ac0ca4b4db920e630b6f73d07f60c9b",
+                                                     "portable":  "b4dd86d923034eb1de366b6f205996b83d4cf40d33aad74e08288c1a9fdf167f"
+                                                 }
+                                  },
+                      "android":  {
+                                      "folder_url":  "https://github.com/Honaro19/FHPlayer/releases",
+                                      "apk_url":  null,
+                                      "aab_url":  null,
+                                      "sha256":  {
+                                                     "apk":  "50819c27e461c5c095c49c97adcc562acbf937d851504497db1e3e54bce87ded",
+                                                     "aab":  "ad18ee06421edebd2ed9d52d9571094d2e7e3c091df8926c9e080f91922492db"
+                                                 }
+                                  }
+                  }
 }

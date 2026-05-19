@@ -1,0 +1,6 @@
+FHPlayer 0.1.3
+
+- Added burst rule helpers: burstcount, burststart, burstduration, burstmember, burstindex.
+- Improved rule editor with fullscreen mode, resizable area, and visible line numbers.
+- Fixed fullscreen player border artifacts after maximize on Windows.
+- Unified Flutter rule editor behavior for Windows and Android builds.

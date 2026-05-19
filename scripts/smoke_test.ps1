@@ -330,6 +330,9 @@ try {
       throw "Missing built Windows installer at $setupPath"
     }
 
+    if (Test-Path $installerInstallRoot) {
+      Remove-Item -LiteralPath $installerInstallRoot -Recurse -Force
+    }
     New-Item -ItemType Directory -Force -Path $installerInstallRoot | Out-Null
     Invoke-CheckedCommand `
       -FilePath $setupPath `

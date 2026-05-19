@@ -1,6 +1,6 @@
 param(
   [string]$Repo = "Honaro19/FHPlayer",
-  [string]$Version = "0.1.2"
+  [string]$Version = "0.1.3"
 )
 
 $GhPath = Get-Command gh -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source
@@ -35,19 +35,20 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $ReleaseNotes = @"
-- Added Library playlist saving with editable names and automatic replacement of renamed Library playlists.
-- Moved playlist actions into the Playlist area and added Library delete flows for videos, funscripts, and playlists.
-- Improved loading saved playlists when referenced video or funscript paths are missing.
-- Fixed Android Library playlist loading crashes caused by interrupted local file streams.
+- Added fast-trigger and burst helper functions in the Lovense rule syntax:
+  burstcount, burststart, burstduration, burstmember, and burstindex.
+- Improved the rule editor with fullscreen mode, visible line numbers, and resizable input area.
+- Fixed fullscreen player edge artifacts on Windows after switching from a maximized window.
+- Unified Flutter behavior across Windows and Android for the Lovense rule editor improvements.
 "@
 
 $Assets = @(
-  "Windows\0.1.2\FHPlayer-0.1.2-Setup.exe",
-  "Windows\0.1.2\FHPlayer-Portable-0.1.2.zip",
-  "Windows\0.1.2\SHA256SUMS-Windows.txt",
-  "Android\0.1.2\FHPlayer-0.1.2.apk",
-  "Android\0.1.2\FHPlayer-0.1.2.aab",
-  "Android\0.1.2\SHA256SUMS-Android.txt",
+  "Windows\$Version\FHPlayer-$Version-Setup.exe",
+  "Windows\$Version\FHPlayer-Portable-$Version.zip",
+  "Windows\$Version\SHA256SUMS.txt",
+  "Android\$Version\FHPlayer-$Version.apk",
+  "Android\$Version\FHPlayer-$Version.aab",
+  "Android\$Version\SHA256SUMS.txt",
   "update_manifest.json"
 )
 

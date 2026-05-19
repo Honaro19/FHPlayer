@@ -581,6 +581,19 @@ List<String> _readStringList(Object? value) {
       .toList();
 }
 
+double _readDoubleOrFallback(Object? value, double fallback) {
+  if (value is num) {
+    return value.toDouble();
+  }
+  if (value is String) {
+    final double? parsed = double.tryParse(value.trim());
+    if (parsed != null) {
+      return parsed;
+    }
+  }
+  return fallback;
+}
+
 Map<String, dynamic> _readJsonMap(Object? value) {
   if (value is Map<String, dynamic>) {
     return value;
@@ -780,6 +793,9 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
   static const double _wideListHeightFactor = 0.23;
   static const double _wideListMinHeight = 220;
   static const double _wideListMaxHeight = 360;
+  static const double _lovenseRuleEditorMinHeight = 86;
+  static const double _lovenseRuleEditorMaxHeight = 520;
+  static const double _lovenseRuleEditorDefaultHeight = 110;
   static const Duration _playerControlsHideDelay = Duration(seconds: 2);
 
   VideoPlayerController? _videoController;
@@ -840,6 +856,7 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
   final Map<String, Timer> _lovenseLiveAutoStopTimers = <String, Timer>{};
   bool _playerControlsVisible = true;
   bool _fullscreenPlayerVisible = false;
+  bool _restoreMaximizedAfterFullscreen = false;
   double _playerVolume = 1.0;
   double _lastAudiblePlayerVolume = 1.0;
   PlaylistMode _playlistMode = PlaylistMode.sequential;
@@ -850,6 +867,7 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
   bool _showFunscriptOverviewPanel = true;
   bool _showExecutionLogPanel = true;
   bool _showUpdatesPanel = true;
+  double _lovenseRuleEditorHeight = _lovenseRuleEditorDefaultHeight;
   bool _lovensePanelCollapsed = false;
   bool _lovenseRuleSyntaxExpanded = false;
   bool _updateAutoCheck = false;
@@ -1001,6 +1019,12 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
   String _rulesTextForProfile(LovenseConnectionProfile profile) {
     final String trimmed = profile.rulesText.trim();
     return trimmed.isEmpty ? LovenseMockRuleScript.defaultSource : trimmed;
+  }
+
+  double _clampLovenseRuleEditorHeight(double value) {
+    return value
+        .clamp(_lovenseRuleEditorMinHeight, _lovenseRuleEditorMaxHeight)
+        .toDouble();
   }
 
   void _syncControllersFromSelectedLovenseProfile() {
@@ -1228,6 +1252,12 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
         _showFunscriptOverviewPanel = ui['showFunscriptOverview'] != false;
         _showExecutionLogPanel = ui['showExecutionLog'] != false;
         _showUpdatesPanel = ui['showUpdates'] != false;
+        _lovenseRuleEditorHeight = _clampLovenseRuleEditorHeight(
+          _readDoubleOrFallback(
+            ui['lovenseRuleEditorHeight'],
+            _lovenseRuleEditorDefaultHeight,
+          ),
+        );
         _lovenseLiveEnabled = useLiveMode;
         _lovensePanelCollapsed = lovense['panelCollapsed'] == true;
         _lovenseProfiles = profiles;
@@ -1252,6 +1282,12 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
         _showFunscriptOverviewPanel = ui['showFunscriptOverview'] != false;
         _showExecutionLogPanel = ui['showExecutionLog'] != false;
         _showUpdatesPanel = ui['showUpdates'] != false;
+        _lovenseRuleEditorHeight = _clampLovenseRuleEditorHeight(
+          _readDoubleOrFallback(
+            ui['lovenseRuleEditorHeight'],
+            _lovenseRuleEditorDefaultHeight,
+          ),
+        );
         _lovenseLiveEnabled = useLiveMode;
         _lovensePanelCollapsed = lovense['panelCollapsed'] == true;
         _lovenseProfiles = profiles;
@@ -1280,6 +1316,7 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
         'showFunscriptOverview': _showFunscriptOverviewPanel,
         'showExecutionLog': _showExecutionLogPanel,
         'showUpdates': _showUpdatesPanel,
+        'lovenseRuleEditorHeight': _lovenseRuleEditorHeight,
       },
       'lovense': <String, dynamic>{
         'executionMode': _lovenseExecutionMode.name,
@@ -3725,13 +3762,33 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
     }
     final bool fullscreen = !_fullscreenPlayerVisible;
     if (supportsDesktopWindowManager) {
+      if (Platform.isWindows && fullscreen) {
+        try {
+          final bool wasMaximized = await windowManager.isMaximized();
+          _restoreMaximizedAfterFullscreen = wasMaximized;
+          if (wasMaximized) {
+            await windowManager.unmaximize();
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+          }
+        } catch (_) {
+          _restoreMaximizedAfterFullscreen = false;
+        }
+      }
       try {
         await windowManager.setFullScreen(fullscreen);
       } catch (error) {
+        _restoreMaximizedAfterFullscreen = false;
         _appendLog(
           ExecutionLogEntry.error('Fullscreen failed', error.toString()),
         );
         return;
+      }
+      if (Platform.isWindows &&
+          !fullscreen &&
+          _restoreMaximizedAfterFullscreen) {
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        await windowManager.maximize();
+        _restoreMaximizedAfterFullscreen = false;
       }
     }
     if (!mounted) {
@@ -3818,6 +3875,233 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
   void _applyLovenseFastTriggerGuardPreset() {
     _lovenseRulesController.text = kLovenseFastTriggerGuardPreset;
     _updateLovenseMockRules(_lovenseRulesController.text);
+  }
+
+  String get _lovenseRuleReferenceTooltip =>
+      'Variables: pos, index, at, time, current, currentms, '
+      'delta, deltams, gap, gapms, triggergap, triggergapms. '
+      'Functions: burststart(maxGapMs,maxTriggers), '
+      'burstduration(maxGapMs,maxTriggers), '
+      'burstmember(maxGapMs,maxTriggers), '
+      'burstindex(maxGapMs,maxTriggers), '
+      'burstcount(maxGapMs)';
+
+  Future<void> _openLovenseRuleEditorFullscreen() async {
+    final String initialRuleText = _lovenseRulesController.text.replaceFirst(
+      RegExp(r'^(?:[ \t]*\r?\n)+'),
+      '',
+    );
+    final TextEditingController editorController = TextEditingController(
+      text: initialRuleText,
+    );
+    final ScrollController editorScrollController = ScrollController();
+    final ScrollController lineNumberScrollController = ScrollController();
+    void syncLineNumberScroll() {
+      if (!lineNumberScrollController.hasClients ||
+          !editorScrollController.hasClients) {
+        return;
+      }
+      final double target = editorScrollController.offset.clamp(
+        0.0,
+        lineNumberScrollController.position.maxScrollExtent,
+      );
+      if ((lineNumberScrollController.offset - target).abs() > 0.5) {
+        lineNumberScrollController.jumpTo(target);
+      }
+    }
+
+    editorScrollController.addListener(syncLineNumberScroll);
+    final String? updated = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return Dialog(
+          insetPadding: const EdgeInsets.all(12),
+          child: SizedBox(
+            width: MediaQuery.of(context).size.width * 0.96,
+            height: MediaQuery.of(context).size.height * 0.92,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 8, 6),
+                  child: Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          'Rule editor',
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      Tooltip(
+                        message: _lovenseRuleReferenceTooltip,
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 6),
+                          child: Icon(Icons.help_outline, size: 20),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Apply fast-trigger guard preset',
+                        onPressed: () {
+                          editorController.text =
+                              kLovenseFastTriggerGuardPreset;
+                        },
+                        icon: const Icon(Icons.bolt),
+                      ),
+                      IconButton(
+                        tooltip: 'Reset selected user rules',
+                        onPressed: () {
+                          editorController.text =
+                              LovenseMockRuleScript.defaultSource;
+                        },
+                        icon: const Icon(Icons.restart_alt),
+                      ),
+                      IconButton(
+                        tooltip: 'Close without apply',
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                    child: ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: editorController,
+                      builder:
+                          (BuildContext context, TextEditingValue value, _) {
+                            final TextStyle editorTextStyle =
+                                Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                  fontFamily: 'Consolas',
+                                  height: 1.45,
+                                ) ??
+                                const TextStyle(
+                                  fontFamily: 'Consolas',
+                                  fontSize: 16,
+                                  height: 1.45,
+                                );
+                            final TextStyle lineNumberStyle = editorTextStyle
+                                .copyWith(
+                                  color: AppColors.text.withValues(alpha: 0.82),
+                                  fontWeight: FontWeight.w700,
+                                );
+                            final int lineCount =
+                                '\n'.allMatches(value.text).length + 1;
+                            final String lineNumbersText =
+                                List<String>.generate(
+                                  lineCount,
+                                  (int index) => '${index + 1}',
+                                ).join('\n');
+                            return Container(
+                              clipBehavior: Clip.antiAlias,
+                              decoration: BoxDecoration(
+                                color: AppColors.panelStrong,
+                                border: Border.all(color: AppColors.border),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: <Widget>[
+                                  Container(
+                                    width: 74,
+                                    decoration: const BoxDecoration(
+                                      color: AppColors.accentSoft,
+                                      border: Border(
+                                        right: BorderSide(
+                                          color: AppColors.border,
+                                        ),
+                                      ),
+                                    ),
+                                    child: SingleChildScrollView(
+                                      controller: lineNumberScrollController,
+                                      physics:
+                                          const NeverScrollableScrollPhysics(),
+                                      padding: const EdgeInsets.fromLTRB(
+                                        6,
+                                        14,
+                                        10,
+                                        14,
+                                      ),
+                                      child: Align(
+                                        alignment: Alignment.topRight,
+                                        child: Text(
+                                          lineNumbersText,
+                                          textAlign: TextAlign.right,
+                                          style: lineNumberStyle,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: DecoratedBox(
+                                      decoration: const BoxDecoration(
+                                        color: AppColors.panelStrong,
+                                      ),
+                                      child: TextField(
+                                        controller: editorController,
+                                        scrollController:
+                                            editorScrollController,
+                                        maxLines: null,
+                                        minLines: null,
+                                        expands: true,
+                                        style: editorTextStyle,
+                                        decoration: const InputDecoration(
+                                          border: InputBorder.none,
+                                          enabledBorder: InputBorder.none,
+                                          focusedBorder: InputBorder.none,
+                                          filled: false,
+                                          contentPadding: EdgeInsets.fromLTRB(
+                                            12,
+                                            14,
+                                            12,
+                                            14,
+                                          ),
+                                          hintText: 'Rule text',
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: <Widget>[
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Cancel'),
+                      ),
+                      const SizedBox(width: 10),
+                      FilledButton(
+                        onPressed: () =>
+                            Navigator.of(context).pop(editorController.text),
+                        child: const Text('Apply'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    editorScrollController.removeListener(syncLineNumberScroll);
+    editorController.dispose();
+    editorScrollController.dispose();
+    lineNumberScrollController.dispose();
+    if (updated == null) {
+      return;
+    }
+    _lovenseRulesController.text = updated;
+    _updateLovenseMockRules(updated);
   }
 
   PlaylistEntryData _currentEntrySnapshot() {
@@ -6534,34 +6818,43 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
                       },
                     ),
                     const Divider(height: 24),
-                    TextField(
-                      controller: _lovenseRulesController,
-                      maxLines: 3,
-                      minLines: 3,
-                      style: const TextStyle(fontFamily: 'Consolas'),
-                      decoration: InputDecoration(
-                        labelText:
-                            'Rule text (${selectedProfile.displayLabel})',
-                        helperText:
-                            'Example: if pos >= 15 then vibrate(10, 800) | else stop()',
-                        alignLabelWithHint: true,
-                        border: const OutlineInputBorder(),
-                        suffixIcon: Row(
+                    SizedBox(
+                      height: _lovenseRuleEditorHeight,
+                      child: TextField(
+                        controller: _lovenseRulesController,
+                        maxLines: null,
+                        minLines: null,
+                        expands: true,
+                        style: const TextStyle(fontFamily: 'Consolas'),
+                        decoration: InputDecoration(
+                          labelText:
+                              'Rule text (${selectedProfile.displayLabel})',
+                          helperText:
+                              'Example: if pos >= 15 then vibrate(10, 800) | else stop()',
+                          alignLabelWithHint: true,
+                          border: const OutlineInputBorder(),
+                        ),
+                        onChanged: _updateLovenseMockRules,
+                      ),
+                    ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 6, right: 2),
+                        child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: <Widget>[
                             Tooltip(
-                              message:
-                                  'Variables: pos, index, at, time, current, currentms, '
-                                  'delta, deltams, gap, gapms, triggergap, triggergapms. '
-                                  'Functions: burststart(maxGapMs,maxTriggers), '
-                                  'burstduration(maxGapMs,maxTriggers), '
-                                  'burstmember(maxGapMs,maxTriggers), '
-                                  'burstindex(maxGapMs,maxTriggers), '
-                                  'burstcount(maxGapMs)',
+                              message: _lovenseRuleReferenceTooltip,
                               child: const Padding(
                                 padding: EdgeInsets.symmetric(horizontal: 8),
                                 child: Icon(Icons.help_outline, size: 20),
                               ),
+                            ),
+                            IconButton(
+                              tooltip: 'Open full-screen editor',
+                              onPressed: _openLovenseRuleEditorFullscreen,
+                              icon: const Icon(Icons.open_in_full),
                             ),
                             IconButton(
                               tooltip: 'Apply fast-trigger guard preset',
@@ -6573,10 +6866,80 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
                               onPressed: _resetLovenseMockRules,
                               icon: const Icon(Icons.restart_alt),
                             ),
+                            const SizedBox(width: 8),
+                            MouseRegion(
+                              cursor: SystemMouseCursors.resizeUpDown,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onVerticalDragUpdate:
+                                    (DragUpdateDetails details) {
+                                      setState(() {
+                                        _lovenseRuleEditorHeight =
+                                            _clampLovenseRuleEditorHeight(
+                                              _lovenseRuleEditorHeight +
+                                                  details.delta.dy,
+                                            );
+                                      });
+                                    },
+                                onVerticalDragEnd: (_) {
+                                  unawaited(_saveLocalSettings());
+                                },
+                                onDoubleTap: () {
+                                  setState(() {
+                                    _lovenseRuleEditorHeight =
+                                        _lovenseRuleEditorDefaultHeight;
+                                  });
+                                  unawaited(_saveLocalSettings());
+                                },
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.panelStrong,
+                                    border: Border.all(color: AppColors.border),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: <Widget>[
+                                      const Icon(
+                                        Icons.unfold_more,
+                                        size: 18,
+                                        color: AppColors.muted,
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Drag to resize',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelSmall
+                                            ?.copyWith(
+                                              color: AppColors.muted,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Text(
+                                        '${_lovenseRuleEditorHeight.round()} px',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelSmall
+                                            ?.copyWith(
+                                              color: AppColors.text,
+                                              fontFamily: 'Consolas',
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),
-                      onChanged: _updateLovenseMockRules,
                     ),
                     const SizedBox(height: 10),
                     ruleError == null
