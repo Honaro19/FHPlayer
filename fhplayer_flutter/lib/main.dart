@@ -18,7 +18,9 @@ Future<void> main() async {
   if (supportsDesktopWindowManager) {
     await windowManager.ensureInitialized();
   }
-  VideoPlayerMediaKit.ensureInitialized(windows: true);
+  if (Platform.isWindows) {
+    VideoPlayerMediaKit.ensureInitialized(windows: true);
+  }
   runApp(const FHPlayerApp());
 }
 
@@ -43,6 +45,11 @@ const String kUpdateStatusDisclosure =
     'Checks for updates via GitHub Releases.';
 const int kPlaylistSchemaVersion = 1;
 const String kPlaylistType = 'fhplayer-playlist';
+const String kLovenseFastTriggerGuardPreset =
+    'if burststart(90, 3) >= 1 then vibrate(10, burstduration(90, 3))\n'
+    'else if burstmember(90, 3) >= 1 then stop()\n'
+    'else if pos >= 15 then vibrate(10, 800)\n'
+    'else stop()';
 const List<({String action, String range, Set<String> requiredCapabilities})>
 kLovenseActionRangeCatalog =
     <({String action, String range, Set<String> requiredCapabilities})>[
@@ -765,13 +772,14 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
   static const int _uiRefreshIntervalMs = 120;
   static const double _wideLayoutMinWidth = 1040;
   static const double _splitPanelsMinWidth = 760;
+  static const double _desktopContentMaxWidth = 1960;
   static const double _defaultListPanelHeight = 340;
   static const double _widePlayerHeightFactor = 0.38;
   static const double _widePlayerMinHeight = 280;
-  static const double _widePlayerMaxHeight = 420;
+  static const double _widePlayerMaxHeight = 520;
   static const double _wideListHeightFactor = 0.23;
   static const double _wideListMinHeight = 220;
-  static const double _wideListMaxHeight = 300;
+  static const double _wideListMaxHeight = 360;
   static const Duration _playerControlsHideDelay = Duration(seconds: 2);
 
   VideoPlayerController? _videoController;
@@ -1089,21 +1097,37 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
   }
 
   Future<void> _initializeLocalEnvironment() async {
-    await _ensureManagedDirectories();
-    await _loadAppVersion();
-    await _loadLocalSettings();
-    if (!mounted) {
-      _updateStatus = _buildUpdateIdleStatusMessage();
-    } else {
-      setState(() {
+    try {
+      await _ensureManagedDirectories();
+      await _loadAppVersion();
+      await _loadLocalSettings();
+      if (!mounted) {
         _updateStatus = _buildUpdateIdleStatusMessage();
+      } else {
+        setState(() {
+          _updateStatus = _buildUpdateIdleStatusMessage();
+        });
+      }
+      _refreshLovenseLiveRuleValidation();
+      await _refreshDiagnosticsInfo();
+      _refreshLibraryStatus();
+      if (_updateAutoCheck) {
+        await _checkForUpdates(manual: false);
+      }
+    } catch (error) {
+      if (!mounted) {
+        _updateStatus = 'Startup warning: $error';
+        return;
+      }
+      setState(() {
+        _updateStatus = 'Startup warning: $error';
       });
-    }
-    _refreshLovenseLiveRuleValidation();
-    await _refreshDiagnosticsInfo();
-    _refreshLibraryStatus();
-    if (_updateAutoCheck) {
-      await _checkForUpdates(manual: false);
+      _appendLog(
+        ExecutionLogEntry.error(
+          'Startup initialization failed',
+          error.toString(),
+        ),
+      );
     }
   }
 
@@ -2461,11 +2485,18 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
   }
 
   void _triggerDueActions(int positionMs) {
+    final int? previousTriggeredAtMs =
+        _funscriptCursor.lastTriggeredAction?.atMs;
     final List<FunscriptAction> dueActions = _funscriptCursor.triggerDue(
       positionMs,
     );
+    int? previousActionAtMs = previousTriggeredAtMs;
     for (final FunscriptAction action in dueActions) {
       final int deltaMs = positionMs - action.atMs;
+      final int triggerGapMs = previousActionAtMs == null
+          ? -1
+          : math.max(0, action.atMs - previousActionAtMs);
+      previousActionAtMs = action.atMs;
       _recordTimingDelta(deltaMs);
       _appendLog(
         ExecutionLogEntry.action(
@@ -2475,8 +2506,182 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
         ),
         refresh: false,
       );
-      _sendLovenseAction(action, positionMs, deltaMs);
+      _sendLovenseAction(action, positionMs, deltaMs, triggerGapMs);
     }
+  }
+
+  int _burstStartForAction(
+    FunscriptAction action,
+    int maxGapMs,
+    int maxTriggers,
+  ) {
+    final ({
+      bool isBurstQualified,
+      bool isBurstStart,
+      int burstDurationMs,
+      int burstTriggerCount,
+      int burstIndex,
+    })
+    metrics = _burstMetricsForAction(
+      action: action,
+      maxGapMs: maxGapMs,
+      maxTriggers: maxTriggers,
+    );
+    return metrics.isBurstStart ? 1 : 0;
+  }
+
+  int _burstCountForAction(FunscriptAction action, int maxGapMs) {
+    final ({int burstTriggerCount, int burstIndex, int burstDurationMs})
+    segment = _burstSegmentForAction(action: action, maxGapMs: maxGapMs);
+    return segment.burstTriggerCount >= 2 ? segment.burstTriggerCount : 0;
+  }
+
+  int _burstDurationForAction(
+    FunscriptAction action,
+    int maxGapMs,
+    int maxTriggers,
+  ) {
+    final ({
+      bool isBurstQualified,
+      bool isBurstStart,
+      int burstDurationMs,
+      int burstTriggerCount,
+      int burstIndex,
+    })
+    metrics = _burstMetricsForAction(
+      action: action,
+      maxGapMs: maxGapMs,
+      maxTriggers: maxTriggers,
+    );
+    return metrics.isBurstStart ? metrics.burstDurationMs : 0;
+  }
+
+  int _burstMemberForAction(
+    FunscriptAction action,
+    int maxGapMs,
+    int maxTriggers,
+  ) {
+    final ({
+      bool isBurstQualified,
+      bool isBurstStart,
+      int burstDurationMs,
+      int burstTriggerCount,
+      int burstIndex,
+    })
+    metrics = _burstMetricsForAction(
+      action: action,
+      maxGapMs: maxGapMs,
+      maxTriggers: maxTriggers,
+    );
+    return metrics.isBurstQualified ? 1 : 0;
+  }
+
+  int _burstIndexForAction(
+    FunscriptAction action,
+    int maxGapMs,
+    int maxTriggers,
+  ) {
+    final ({
+      bool isBurstQualified,
+      bool isBurstStart,
+      int burstDurationMs,
+      int burstTriggerCount,
+      int burstIndex,
+    })
+    metrics = _burstMetricsForAction(
+      action: action,
+      maxGapMs: maxGapMs,
+      maxTriggers: maxTriggers,
+    );
+    return metrics.isBurstQualified ? metrics.burstIndex : 0;
+  }
+
+  ({
+    bool isBurstQualified,
+    bool isBurstStart,
+    int burstDurationMs,
+    int burstTriggerCount,
+    int burstIndex,
+  })
+  _burstMetricsForAction({
+    required FunscriptAction action,
+    required int maxGapMs,
+    required int maxTriggers,
+  }) {
+    if (maxTriggers < 2) {
+      return (
+        isBurstQualified: false,
+        isBurstStart: false,
+        burstDurationMs: 0,
+        burstTriggerCount: 1,
+        burstIndex: 0,
+      );
+    }
+    final ({int burstTriggerCount, int burstIndex, int burstDurationMs})
+    segment = _burstSegmentForAction(action: action, maxGapMs: maxGapMs);
+    if (segment.burstTriggerCount < 2 ||
+        segment.burstTriggerCount > maxTriggers) {
+      return (
+        isBurstQualified: false,
+        isBurstStart: false,
+        burstDurationMs: 0,
+        burstTriggerCount: segment.burstTriggerCount,
+        burstIndex: 0,
+      );
+    }
+
+    final bool isStart = segment.burstIndex == 1;
+    return (
+      isBurstQualified: true,
+      isBurstStart: isStart,
+      burstDurationMs: segment.burstDurationMs,
+      burstTriggerCount: segment.burstTriggerCount,
+      burstIndex: segment.burstIndex,
+    );
+  }
+
+  ({int burstTriggerCount, int burstIndex, int burstDurationMs})
+  _burstSegmentForAction({
+    required FunscriptAction action,
+    required int maxGapMs,
+  }) {
+    final Funscript? script = _funscript;
+    if (script == null || maxGapMs < 0) {
+      return (burstTriggerCount: 1, burstIndex: 0, burstDurationMs: 0);
+    }
+    if (action.index < 0 || action.index >= script.actions.length) {
+      return (burstTriggerCount: 1, burstIndex: 0, burstDurationMs: 0);
+    }
+
+    final List<FunscriptAction> actions = script.actions;
+    final int triggerIndex = action.index;
+
+    int startIndex = triggerIndex;
+    while (startIndex > 0) {
+      final int gap = actions[startIndex].atMs - actions[startIndex - 1].atMs;
+      if (gap >= maxGapMs) {
+        break;
+      }
+      startIndex -= 1;
+    }
+
+    int endIndex = triggerIndex;
+    while (endIndex + 1 < actions.length) {
+      final int gap = actions[endIndex + 1].atMs - actions[endIndex].atMs;
+      if (gap >= maxGapMs) {
+        break;
+      }
+      endIndex += 1;
+    }
+
+    return (
+      burstTriggerCount: (endIndex - startIndex) + 1,
+      burstIndex: (triggerIndex - startIndex) + 1,
+      burstDurationMs: math.max(
+        0,
+        actions[endIndex].atMs - actions[startIndex].atMs,
+      ),
+    );
   }
 
   void _syncActionCursor(int positionMs, {bool includeCurrentAction = false}) {
@@ -2714,12 +2919,19 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
     }
   }
 
-  void _sendLovenseAction(FunscriptAction action, int positionMs, int deltaMs) {
+  void _sendLovenseAction(
+    FunscriptAction action,
+    int positionMs,
+    int deltaMs,
+    int triggerGapMs,
+  ) {
     if (_lovenseLiveEnabled) {
-      unawaited(_sendLovenseLiveAction(action, positionMs, deltaMs));
+      unawaited(
+        _sendLovenseLiveAction(action, positionMs, deltaMs, triggerGapMs),
+      );
       return;
     }
-    _sendLovenseMockAction(action, positionMs, deltaMs);
+    _sendLovenseMockAction(action, positionMs, deltaMs, triggerGapMs);
   }
 
   void _sendLovenseStop(String reason, int positionMs) {
@@ -3175,6 +3387,7 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
     FunscriptAction action,
     int positionMs,
     int deltaMs,
+    int triggerGapMs,
   ) async {
     final List<LovenseConnectionProfile> activeProfiles =
         _activeLovenseProfiles();
@@ -3193,6 +3406,17 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
       pos: action.pos,
       currentMs: positionMs,
       deltaMs: deltaMs,
+      triggerGapMs: triggerGapMs,
+      burstStartResolver: (int maxGapMs, int maxTriggers) =>
+          _burstStartForAction(action, maxGapMs, maxTriggers),
+      burstDurationMsResolver: (int maxGapMs, int maxTriggers) =>
+          _burstDurationForAction(action, maxGapMs, maxTriggers),
+      burstMemberResolver: (int maxGapMs, int maxTriggers) =>
+          _burstMemberForAction(action, maxGapMs, maxTriggers),
+      burstIndexResolver: (int maxGapMs, int maxTriggers) =>
+          _burstIndexForAction(action, maxGapMs, maxTriggers),
+      burstCountResolver: (int maxGapMs) =>
+          _burstCountForAction(action, maxGapMs),
     );
 
     final List<LovenseLiveRuleIssue> aggregatedIssues =
@@ -3367,6 +3591,7 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
     FunscriptAction action,
     int positionMs,
     int deltaMs,
+    int triggerGapMs,
   ) {
     if (!_lovenseMockEnabled) {
       return;
@@ -3378,6 +3603,17 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
       pos: action.pos,
       currentMs: positionMs,
       deltaMs: deltaMs,
+      triggerGapMs: triggerGapMs,
+      burstStartResolver: (int maxGapMs, int maxTriggers) =>
+          _burstStartForAction(action, maxGapMs, maxTriggers),
+      burstDurationMsResolver: (int maxGapMs, int maxTriggers) =>
+          _burstDurationForAction(action, maxGapMs, maxTriggers),
+      burstMemberResolver: (int maxGapMs, int maxTriggers) =>
+          _burstMemberForAction(action, maxGapMs, maxTriggers),
+      burstIndexResolver: (int maxGapMs, int maxTriggers) =>
+          _burstIndexForAction(action, maxGapMs, maxTriggers),
+      burstCountResolver: (int maxGapMs) =>
+          _burstCountForAction(action, maxGapMs),
     );
     final List<LovenseMockEvaluationResult> results = _lovenseMockClient
         .evaluateAction(context);
@@ -3409,6 +3645,9 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
 
   void _sendLovenseMockStop(String reason, int positionMs) {
     if (!_lovenseMockEnabled) {
+      return;
+    }
+    if (!_lovenseMockClient.hasActiveOutput && !_timingRunActive) {
       return;
     }
 
@@ -3573,6 +3812,11 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
 
   void _resetLovenseMockRules() {
     _lovenseRulesController.text = LovenseMockRuleScript.defaultSource;
+    _updateLovenseMockRules(_lovenseRulesController.text);
+  }
+
+  void _applyLovenseFastTriggerGuardPreset() {
+    _lovenseRulesController.text = kLovenseFastTriggerGuardPreset;
     _updateLovenseMockRules(_lovenseRulesController.text);
   }
 
@@ -4779,7 +5023,9 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
                     child: Align(
                       alignment: Alignment.topCenter,
                       child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 1380),
+                        constraints: const BoxConstraints(
+                          maxWidth: _desktopContentMaxWidth,
+                        ),
                         child: SingleChildScrollView(
                           padding: const EdgeInsets.fromLTRB(16, 24, 16, 40),
                           child: LayoutBuilder(
@@ -4814,6 +5060,10 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
                                     listPanelHeight: listPanelHeight,
                                   );
                                   final Widget sideColumn = _buildSideColumn();
+                                  final double sideColumnWidth =
+                                      (constraints.maxWidth * 0.30)
+                                          .clamp(410.0, 540.0)
+                                          .toDouble();
 
                                   return Column(
                                     crossAxisAlignment:
@@ -4829,7 +5079,7 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
                                             Expanded(child: mediaColumn),
                                             const SizedBox(width: 20),
                                             SizedBox(
-                                              width: 410,
+                                              width: sideColumnWidth,
                                               child: sideColumn,
                                             ),
                                           ],
@@ -6302,11 +6552,21 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
                             Tooltip(
                               message:
                                   'Variables: pos, index, at, time, current, currentms, '
-                                  'delta, deltams',
+                                  'delta, deltams, gap, gapms, triggergap, triggergapms. '
+                                  'Functions: burststart(maxGapMs,maxTriggers), '
+                                  'burstduration(maxGapMs,maxTriggers), '
+                                  'burstmember(maxGapMs,maxTriggers), '
+                                  'burstindex(maxGapMs,maxTriggers), '
+                                  'burstcount(maxGapMs)',
                               child: const Padding(
                                 padding: EdgeInsets.symmetric(horizontal: 8),
                                 child: Icon(Icons.help_outline, size: 20),
                               ),
+                            ),
+                            IconButton(
+                              tooltip: 'Apply fast-trigger guard preset',
+                              onPressed: _applyLovenseFastTriggerGuardPreset,
+                              icon: const Icon(Icons.bolt),
                             ),
                             IconButton(
                               tooltip: 'Reset selected user rules',
@@ -6392,8 +6652,27 @@ class _FHPlayerHomePageState extends State<FHPlayerHomePage>
                           child: Text(
                             'Example:\n'
                             'if pos >= 15 then vibrate(10, 800)\n'
+                            'else if gapms < 90 then stop()\n'
                             'else stop()\n\n'
-                            'Variables: pos, index, at, time, current, currentms, delta, deltams.\n'
+                            'Preset "fast-trigger guard":\n'
+                            'if burststart(90, 3) >= 1 then vibrate(10, burstduration(90, 3))\n'
+                            'else if burstmember(90, 3) >= 1 then stop()\n'
+                            'else if pos >= 15 then vibrate(10, 800)\n'
+                            'else stop()\n\n'
+                            'Exact length example:\n'
+                            'if burststart(90, 8) >= 1 then vibrate(10, burstduration(90, 8))\n'
+                            'else if burstcount(90) == 5 then vibrate(8, 600)\n'
+                            'else stop()\n\n'
+                            'Variables: pos, index, at, time, current, currentms, delta, deltams, '
+                            'gap, gapms, triggergap, triggergapms.\n'
+                            'burststart(...) is 1 only on the first trigger of a detected burst. '
+                            'burstduration(...) returns that burst duration in ms.\n'
+                            'burstmember(...) is 1 for every trigger inside a qualifying burst. '
+                            'burstindex(...) is 1-based inside that burst.\n'
+                            'burstcount(...) returns the total trigger count of the current burst (or 0 outside bursts).\n'
+                            'The second function argument is maxTriggers (burst lengths above it are excluded).\n'
+                            'Use burststart(...) before burstmember(...) to avoid duplicate or conflicting events.\n'
+                            'No manual reset is needed: both functions are recomputed from script timings for each trigger.\n'
                             'In Lovense live mode, select at least one detected device first.',
                           ),
                         ),

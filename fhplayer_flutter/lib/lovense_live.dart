@@ -188,7 +188,25 @@ class LovenseLiveRuleEngine {
           .take(entry.parameterRanges.length)
           .toList();
       final String actionText = entry.buildAction(actionParameters);
-      final int durationMs = parsedCommand.durationMs;
+      final int durationMs = parsedCommand.durationExpression.resolve(context);
+      if (durationMs < 0) {
+        issues.add(
+          LovenseLiveRuleIssue(
+            'Duration must be >= 0.',
+            lineNumber: parsedCommand.lineNumber,
+          ),
+        );
+        continue;
+      }
+      if (durationMs > 0 && durationMs < 200) {
+        issues.add(
+          LovenseLiveRuleIssue(
+            'Duration must be 0 or >= 200 ms.',
+            lineNumber: parsedCommand.lineNumber,
+          ),
+        );
+        continue;
+      }
       final int timeSec = durationMs <= 0
           ? 0
           : mathMax(1, (durationMs / 1000).ceil());
@@ -363,12 +381,9 @@ class LovenseLiveRuleEngine {
         continue;
       }
 
-      final List<String> rawArguments = match
-          .group(2)!
-          .split(',')
-          .map((String value) => value.trim())
-          .where((String value) => value.isNotEmpty)
-          .toList();
+      final List<String> rawArguments = _splitTopLevelArguments(
+        match.group(2)!,
+      );
 
       if (actionKey == 'stop') {
         if (rawArguments.isNotEmpty) {
@@ -383,7 +398,7 @@ class LovenseLiveRuleEngine {
           _ParsedRuleCommand(
             actionKey: actionKey,
             parameters: const <int>[],
-            durationMs: 0,
+            durationExpression: const _RuleNumericExpression.literal(0),
             lineNumber: lineNumber,
           ),
         );
@@ -414,7 +429,7 @@ class LovenseLiveRuleEngine {
           _ParsedRuleCommand(
             actionKey: actionKey,
             parameters: <int>[delayMs],
-            durationMs: 0,
+            durationExpression: const _RuleNumericExpression.literal(0),
             lineNumber: lineNumber,
           ),
         );
@@ -464,35 +479,34 @@ class LovenseLiveRuleEngine {
         continue;
       }
 
-      int durationMs = 0;
+      _RuleNumericExpression durationExpression =
+          const _RuleNumericExpression.literal(0);
       if (rawArguments.length > entry.parameterRanges.length) {
-        final int? parsedDuration = _parseIntArg(rawArguments.last);
-        if (parsedDuration == null || parsedDuration < 0) {
+        final _RuleNumericExpression? parsedDurationExpression =
+            _RuleNumericExpression.tryParse(rawArguments.last);
+        if (parsedDurationExpression == null) {
           issues.add(
             LovenseLiveRuleIssue(
-              'Duration must be >= 0.',
+              'Duration must be a number, variable, or supported function.',
               lineNumber: lineNumber,
             ),
           );
           continue;
         }
-        if (parsedDuration > 0 && parsedDuration < 200) {
-          issues.add(
-            LovenseLiveRuleIssue(
-              'Duration must be 0 or >= 200 ms.',
-              lineNumber: lineNumber,
-            ),
-          );
+        if (!parsedDurationExpression.validate(
+          issues,
+          lineNumber: lineNumber,
+        )) {
           continue;
         }
-        durationMs = parsedDuration;
+        durationExpression = parsedDurationExpression;
       }
 
       commands.add(
         _ParsedRuleCommand(
           actionKey: actionKey,
           parameters: parameters,
-          durationMs: durationMs,
+          durationExpression: durationExpression,
           lineNumber: lineNumber,
         ),
       );
@@ -506,6 +520,43 @@ class LovenseLiveRuleEngine {
       return null;
     }
     return numeric.round();
+  }
+
+  static List<String> _splitTopLevelArguments(String source) {
+    final String trimmed = source.trim();
+    if (trimmed.isEmpty) {
+      return const <String>[];
+    }
+    final List<String> arguments = <String>[];
+    final StringBuffer current = StringBuffer();
+    int depth = 0;
+    for (int index = 0; index < trimmed.length; index += 1) {
+      final String char = trimmed[index];
+      if (char == '(') {
+        depth += 1;
+        current.write(char);
+        continue;
+      }
+      if (char == ')') {
+        depth = mathMax(0, depth - 1);
+        current.write(char);
+        continue;
+      }
+      if (char == ',' && depth == 0) {
+        final String value = current.toString().trim();
+        if (value.isNotEmpty) {
+          arguments.add(value);
+        }
+        current.clear();
+        continue;
+      }
+      current.write(char);
+    }
+    final String trailing = current.toString().trim();
+    if (trailing.isNotEmpty) {
+      arguments.add(trailing);
+    }
+    return arguments;
   }
 
   static String _resolveActionKey(String source) {
@@ -535,41 +586,37 @@ class _ParsedRuleCommand {
   const _ParsedRuleCommand({
     required this.actionKey,
     required this.parameters,
-    required this.durationMs,
+    required this.durationExpression,
     required this.lineNumber,
   });
 
   final String actionKey;
   final List<int> parameters;
-  final int durationMs;
+  final _RuleNumericExpression durationExpression;
   final int lineNumber;
 }
 
 class _RuleCondition {
   const _RuleCondition({
-    required this.leftVariable,
+    required this.left,
     required this.operator,
-    required this.rightLiteral,
-    required this.rightVariable,
+    required this.right,
   });
 
-  final String leftVariable;
+  final _RuleNumericExpression left;
   final String operator;
-  final num rightLiteral;
-  final String? rightVariable;
+  final _RuleNumericExpression right;
 
   bool matches(LovenseActionContext context) {
-    final num left = _contextValue(context, leftVariable);
-    final num right = rightVariable == null
-        ? rightLiteral
-        : _contextValue(context, rightVariable!);
+    final num leftValue = left.resolve(context);
+    final num rightValue = right.resolve(context);
     return switch (operator) {
-      '>' => left > right,
-      '>=' => left >= right,
-      '<' => left < right,
-      '<=' => left <= right,
-      '==' => left == right,
-      '!=' => left != right,
+      '>' => leftValue > rightValue,
+      '>=' => leftValue >= rightValue,
+      '<' => leftValue < rightValue,
+      '<=' => leftValue <= rightValue,
+      '==' => leftValue == rightValue,
+      '!=' => leftValue != rightValue,
       _ => false,
     };
   }
@@ -579,9 +626,7 @@ class _RuleCondition {
     required int lineNumber,
     required List<LovenseLiveRuleIssue> issues,
   }) {
-    final RegExp pattern = RegExp(
-      r'^\s*([A-Za-z][A-Za-z0-9]*)\s*(>=|<=|==|!=|>|<)\s*(-?\d+(?:\.\d+)?|[A-Za-z][A-Za-z0-9]*)\s*$',
-    );
+    final RegExp pattern = RegExp(r'^\s*(.+?)\s*(>=|<=|==|!=|>|<)\s*(.+?)\s*$');
     final RegExpMatch? match = pattern.firstMatch(source);
     if (match == null) {
       issues.add(
@@ -591,52 +636,233 @@ class _RuleCondition {
         ),
       );
       return const _RuleCondition(
-        leftVariable: 'pos',
+        left: _RuleNumericExpression.literal(0),
         operator: '>=',
-        rightLiteral: 0,
-        rightVariable: null,
+        right: _RuleNumericExpression.literal(1),
       );
     }
 
-    final String left = match.group(1)!.toLowerCase();
+    final String leftRaw = match.group(1)!.trim();
     final String operator = match.group(2)!;
-    final String rightRaw = match.group(3)!.toLowerCase();
-    if (!_conditionVariables.contains(left)) {
-      issues.add(
-        LovenseLiveRuleIssue(
-          'Unsupported variable "$left".',
-          lineNumber: lineNumber,
-        ),
-      );
-    }
-
-    final num? rightNumeric = num.tryParse(rightRaw);
-    final bool usesRightVariable = rightNumeric == null;
-    if (usesRightVariable && !_conditionVariables.contains(rightRaw)) {
-      issues.add(
-        LovenseLiveRuleIssue(
-          'Unsupported variable "$rightRaw".',
-          lineNumber: lineNumber,
-        ),
-      );
-    }
-    return _RuleCondition(
-      leftVariable: left,
-      operator: operator,
-      rightLiteral: rightNumeric ?? 0,
-      rightVariable: usesRightVariable ? rightRaw : null,
+    final String rightRaw = match.group(3)!.trim();
+    final _RuleNumericExpression? left = _RuleNumericExpression.tryParse(
+      leftRaw,
     );
+    final _RuleNumericExpression? right = _RuleNumericExpression.tryParse(
+      rightRaw,
+    );
+    if (left == null || right == null) {
+      issues.add(
+        LovenseLiveRuleIssue(
+          'Invalid condition "$source".',
+          lineNumber: lineNumber,
+        ),
+      );
+      return const _RuleCondition(
+        left: _RuleNumericExpression.literal(0),
+        operator: '>=',
+        right: _RuleNumericExpression.literal(1),
+      );
+    }
+    left.validate(issues, lineNumber: lineNumber);
+    right.validate(issues, lineNumber: lineNumber);
+    return _RuleCondition(left: left, operator: operator, right: right);
+  }
+}
+
+class _RuleNumericExpression {
+  const _RuleNumericExpression.literal(this.value)
+    : variableName = null,
+      functionName = null,
+      functionArg1 = null,
+      functionArg2 = null;
+
+  const _RuleNumericExpression.variable(this.variableName)
+    : value = null,
+      functionName = null,
+      functionArg1 = null,
+      functionArg2 = null;
+
+  const _RuleNumericExpression.function({
+    required this.functionName,
+    required this.functionArg1,
+    this.functionArg2,
+  }) : value = null,
+       variableName = null;
+
+  final num? value;
+  final String? variableName;
+  final String? functionName;
+  final int? functionArg1;
+  final int? functionArg2;
+
+  static _RuleNumericExpression? tryParse(String source) {
+    final String trimmed = source.trim();
+    final num? literal = num.tryParse(trimmed);
+    if (literal != null) {
+      return _RuleNumericExpression.literal(literal);
+    }
+    final RegExp functionPattern = RegExp(r'^([A-Za-z][A-Za-z0-9_]*)\((.*)\)$');
+    final RegExpMatch? functionMatch = functionPattern.firstMatch(trimmed);
+    if (functionMatch != null) {
+      final String functionName = functionMatch.group(1)!.toLowerCase();
+      final List<String> functionArgs = _splitTopLevelArguments(
+        functionMatch.group(2)!,
+      );
+      if (functionName == 'burstcount') {
+        if (functionArgs.length != 1) {
+          return null;
+        }
+        final int? maxGapMs = int.tryParse(functionArgs.first);
+        if (maxGapMs == null) {
+          return null;
+        }
+        return _RuleNumericExpression.function(
+          functionName: functionName,
+          functionArg1: maxGapMs,
+        );
+      }
+      if (functionArgs.length != 2) {
+        return null;
+      }
+      final int? arg1 = int.tryParse(functionArgs[0]);
+      final int? arg2 = int.tryParse(functionArgs[1]);
+      if (arg1 == null || arg2 == null) {
+        return null;
+      }
+      return _RuleNumericExpression.function(
+        functionName: functionName,
+        functionArg1: arg1,
+        functionArg2: arg2,
+      );
+    }
+    if (RegExp(r'^[A-Za-z][A-Za-z0-9_]*$').hasMatch(trimmed)) {
+      return _RuleNumericExpression.variable(trimmed.toLowerCase());
+    }
+    return null;
   }
 
-  static num _contextValue(LovenseActionContext context, String variable) {
+  bool validate(List<LovenseLiveRuleIssue> issues, {required int lineNumber}) {
+    final String? variable = variableName;
+    if (variable != null && !_conditionVariables.contains(variable)) {
+      issues.add(
+        LovenseLiveRuleIssue(
+          'Unsupported variable "$variable".',
+          lineNumber: lineNumber,
+        ),
+      );
+      return false;
+    }
+    final String? function = functionName;
+    if (function != null) {
+      if (!_supportedRuleFunctions.contains(function)) {
+        issues.add(
+          LovenseLiveRuleIssue(
+            'Unsupported function "$function".',
+            lineNumber: lineNumber,
+          ),
+        );
+        return false;
+      }
+      final int first = functionArg1 ?? -1;
+      final int second = functionArg2 ?? 0;
+      if (function == 'burstcount') {
+        if (first < 0) {
+          issues.add(
+            LovenseLiveRuleIssue(
+              'burstcount(maxGapMs) expects maxGapMs >= 0.',
+              lineNumber: lineNumber,
+            ),
+          );
+          return false;
+        }
+        return true;
+      }
+      if (first < 0 || second < 2) {
+        issues.add(
+          LovenseLiveRuleIssue(
+            '$function(maxGapMs, maxTriggers) expects maxGapMs >= 0 and maxTriggers >= 2.',
+            lineNumber: lineNumber,
+          ),
+        );
+        return false;
+      }
+    }
+    return true;
+  }
+
+  int resolve(LovenseActionContext context) {
+    final String? function = functionName;
+    if (function != null) {
+      final int first = functionArg1 ?? 0;
+      final int second = functionArg2 ?? 0;
+      return switch (function) {
+        'burststart' => context.burstStartResolver?.call(first, second) ?? 0,
+        'burstduration' =>
+          context.burstDurationMsResolver?.call(first, second) ?? 0,
+        'burstmember' => context.burstMemberResolver?.call(first, second) ?? 0,
+        'burstindex' => context.burstIndexResolver?.call(first, second) ?? 0,
+        'burstcount' => context.burstCountResolver?.call(first) ?? 0,
+        _ => 0,
+      };
+    }
+    return _resolveNumber(context).round();
+  }
+
+  num _resolveNumber(LovenseActionContext context) {
+    final String? variable = variableName;
+    if (variable == null) {
+      return value ?? 0;
+    }
     return switch (variable) {
       'pos' || 'level' => context.pos,
       'index' => context.index,
       'at' || 'time' => context.atMs,
       'current' || 'currentms' => context.currentMs,
       'delta' || 'deltams' => context.deltaMs,
+      'gap' ||
+      'gapms' ||
+      'triggergap' ||
+      'triggergapms' => context.triggerGapMs,
       _ => 0,
     };
+  }
+
+  static List<String> _splitTopLevelArguments(String source) {
+    final String trimmed = source.trim();
+    if (trimmed.isEmpty) {
+      return const <String>[];
+    }
+    final List<String> arguments = <String>[];
+    final StringBuffer current = StringBuffer();
+    int depth = 0;
+    for (int index = 0; index < trimmed.length; index += 1) {
+      final String char = trimmed[index];
+      if (char == '(') {
+        depth += 1;
+        current.write(char);
+        continue;
+      }
+      if (char == ')') {
+        depth = mathMax(0, depth - 1);
+        current.write(char);
+        continue;
+      }
+      if (char == ',' && depth == 0) {
+        final String value = current.toString().trim();
+        if (value.isNotEmpty) {
+          arguments.add(value);
+        }
+        current.clear();
+        continue;
+      }
+      current.write(char);
+    }
+    final String trailing = current.toString().trim();
+    if (trailing.isNotEmpty) {
+      arguments.add(trailing);
+    }
+    return arguments;
   }
 }
 
@@ -940,6 +1166,18 @@ const Set<String> _conditionVariables = <String>{
   'currentms',
   'delta',
   'deltams',
+  'gap',
+  'gapms',
+  'triggergap',
+  'triggergapms',
+};
+
+const Set<String> _supportedRuleFunctions = <String>{
+  'burststart',
+  'burstduration',
+  'burstmember',
+  'burstindex',
+  'burstcount',
 };
 
 const Map<String, String> _shortCapabilityMap = <String, String>{

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 class LovenseActionContext {
   const LovenseActionContext({
     required this.index,
@@ -5,6 +7,12 @@ class LovenseActionContext {
     required this.pos,
     required this.currentMs,
     required this.deltaMs,
+    this.triggerGapMs = -1,
+    this.burstStartResolver,
+    this.burstDurationMsResolver,
+    this.burstMemberResolver,
+    this.burstIndexResolver,
+    this.burstCountResolver,
   });
 
   final int index;
@@ -12,6 +20,12 @@ class LovenseActionContext {
   final int pos;
   final int currentMs;
   final int deltaMs;
+  final int triggerGapMs;
+  final int Function(int maxGapMs, int maxTriggers)? burstStartResolver;
+  final int Function(int maxGapMs, int maxTriggers)? burstDurationMsResolver;
+  final int Function(int maxGapMs, int maxTriggers)? burstMemberResolver;
+  final int Function(int maxGapMs, int maxTriggers)? burstIndexResolver;
+  final int Function(int maxGapMs)? burstCountResolver;
 }
 
 class LovenseMockDevice {
@@ -100,14 +114,47 @@ enum LovenseMockConditionOperator {
 }
 
 class LovenseMockNumberExpression {
-  const LovenseMockNumberExpression.literal(this.value) : variableName = null;
+  const LovenseMockNumberExpression.literal(this.value)
+    : variableName = null,
+      functionName = null,
+      functionArg1 = null,
+      functionArg2 = null;
 
-  const LovenseMockNumberExpression.variable(this.variableName) : value = null;
+  const LovenseMockNumberExpression.variable(this.variableName)
+    : value = null,
+      functionName = null,
+      functionArg1 = null,
+      functionArg2 = null;
+
+  const LovenseMockNumberExpression.function({
+    required this.functionName,
+    required this.functionArg1,
+    this.functionArg2,
+  }) : value = null,
+       variableName = null;
 
   final num? value;
   final String? variableName;
+  final String? functionName;
+  final int? functionArg1;
+  final int? functionArg2;
 
   num resolve(LovenseActionContext context) {
+    final String? function = functionName;
+    if (function != null) {
+      final int first = functionArg1 ?? 0;
+      final int second = functionArg2 ?? 0;
+      return switch (function) {
+        'burststart' => context.burstStartResolver?.call(first, second) ?? 0,
+        'burstduration' =>
+          context.burstDurationMsResolver?.call(first, second) ?? 0,
+        'burstmember' => context.burstMemberResolver?.call(first, second) ?? 0,
+        'burstindex' => context.burstIndexResolver?.call(first, second) ?? 0,
+        'burstcount' => context.burstCountResolver?.call(first) ?? 0,
+        _ => 0,
+      };
+    }
+
     final String? variable = variableName;
     if (variable == null) {
       return value ?? 0;
@@ -118,6 +165,10 @@ class LovenseMockNumberExpression {
       'at' || 'time' => context.atMs,
       'current' || 'currentms' => context.currentMs,
       'delta' || 'deltams' => context.deltaMs,
+      'gap' ||
+      'gapms' ||
+      'triggergap' ||
+      'triggergapms' => context.triggerGapMs,
       _ => 0,
     };
   }
@@ -267,6 +318,17 @@ class LovenseMockRuleScript {
     'currentms',
     'delta',
     'deltams',
+    'gap',
+    'gapms',
+    'triggergap',
+    'triggergapms',
+  };
+  static const Set<String> _supportedFunctions = <String>{
+    'burststart',
+    'burstduration',
+    'burstmember',
+    'burstindex',
+    'burstcount',
   };
 
   final String source;
@@ -333,7 +395,7 @@ class LovenseMockRuleScript {
 
   static LovenseMockCondition _parseCondition(String source) {
     final RegExp conditionPattern = RegExp(
-      r'^\s*([A-Za-z][A-Za-z0-9]*)\s*(>=|<=|==|!=|>|<)\s*(-?\d+(?:\.\d+)?|[A-Za-z][A-Za-z0-9]*)\s*$',
+      r'^\s*(.+?)\s*(>=|<=|==|!=|>|<)\s*(.+?)\s*$',
     );
     final RegExpMatch? match = conditionPattern.firstMatch(source);
     if (match == null) {
@@ -368,12 +430,7 @@ class LovenseMockRuleScript {
     }
 
     final String commandName = match.group(1)!.toLowerCase();
-    final List<String> arguments = match
-        .group(2)!
-        .split(',')
-        .map((String argument) => argument.trim())
-        .where((String argument) => argument.isNotEmpty)
-        .toList();
+    final List<String> arguments = _splitTopLevelArguments(match.group(2)!);
 
     if (commandName == 'stop') {
       if (arguments.isNotEmpty) {
@@ -405,6 +462,54 @@ class LovenseMockRuleScript {
     if (literal != null) {
       return LovenseMockNumberExpression.literal(literal);
     }
+    final RegExp functionPattern = RegExp(r'^([A-Za-z][A-Za-z0-9_]*)\((.*)\)$');
+    final RegExpMatch? functionMatch = functionPattern.firstMatch(trimmed);
+    if (functionMatch != null) {
+      final String functionName = functionMatch.group(1)!.toLowerCase();
+      if (!_supportedFunctions.contains(functionName)) {
+        throw FormatException('Unsupported function "$functionName".');
+      }
+      final List<String> functionArgs = _splitTopLevelArguments(
+        functionMatch.group(2)!,
+      );
+      if (functionName == 'burstcount') {
+        if (functionArgs.length != 1) {
+          throw const FormatException(
+            'burstcount(maxGapMs) expects exactly one argument.',
+          );
+        }
+        final int? maxGapMs = int.tryParse(functionArgs.first);
+        if (maxGapMs == null || maxGapMs < 0) {
+          throw const FormatException(
+            'burstcount(maxGapMs) expects maxGapMs >= 0.',
+          );
+        }
+        return LovenseMockNumberExpression.function(
+          functionName: functionName,
+          functionArg1: maxGapMs,
+        );
+      }
+      if (functionArgs.length != 2) {
+        throw FormatException(
+          '$functionName(maxGapMs, maxTriggers) expects exactly two arguments.',
+        );
+      }
+      final int? arg1 = int.tryParse(functionArgs[0]);
+      final int? arg2 = int.tryParse(functionArgs[1]);
+      if (arg1 == null || arg2 == null) {
+        throw FormatException('Invalid function arguments in "$source".');
+      }
+      if (arg1 < 0 || arg2 < 2) {
+        throw FormatException(
+          '$functionName(maxGapMs, maxTriggers) expects maxGapMs >= 0 and maxTriggers >= 2.',
+        );
+      }
+      return LovenseMockNumberExpression.function(
+        functionName: functionName,
+        functionArg1: arg1,
+        functionArg2: arg2,
+      );
+    }
     if (RegExp(r'^[A-Za-z][A-Za-z0-9]*$').hasMatch(trimmed)) {
       final String variableName = trimmed.toLowerCase();
       if (!_supportedVariables.contains(variableName)) {
@@ -413,6 +518,43 @@ class LovenseMockRuleScript {
       return LovenseMockNumberExpression.variable(variableName);
     }
     throw FormatException('Invalid number expression "$source".');
+  }
+
+  static List<String> _splitTopLevelArguments(String source) {
+    final String trimmed = source.trim();
+    if (trimmed.isEmpty) {
+      return const <String>[];
+    }
+    final List<String> arguments = <String>[];
+    final StringBuffer current = StringBuffer();
+    int depth = 0;
+    for (int i = 0; i < trimmed.length; i += 1) {
+      final String char = trimmed[i];
+      if (char == '(') {
+        depth += 1;
+        current.write(char);
+        continue;
+      }
+      if (char == ')') {
+        depth = math.max(0, depth - 1);
+        current.write(char);
+        continue;
+      }
+      if (char == ',' && depth == 0) {
+        final String value = current.toString().trim();
+        if (value.isNotEmpty) {
+          arguments.add(value);
+        }
+        current.clear();
+        continue;
+      }
+      current.write(char);
+    }
+    final String trailing = current.toString().trim();
+    if (trailing.isNotEmpty) {
+      arguments.add(trailing);
+    }
+    return arguments;
   }
 }
 
@@ -459,11 +601,32 @@ class LovenseMockClient {
 
   String? get ruleError => ruleScript.error;
 
+  bool get hasActiveOutput {
+    if (history.isEmpty || devices.isEmpty) {
+      return false;
+    }
+    final Set<String> seenDevices = <String>{};
+    for (final LovenseMockCommand command in history) {
+      if (!seenDevices.add(command.device.id)) {
+        continue;
+      }
+      if (command.action != LovenseMockCommandAction.stop) {
+        return true;
+      }
+      if (seenDevices.length >= devices.length) {
+        break;
+      }
+    }
+    return false;
+  }
+
   void updateRules(String rulesText) {
     ruleScript = LovenseMockRuleScript.parse(rulesText);
   }
 
-  List<LovenseMockEvaluationResult> evaluateAction(LovenseActionContext context) {
+  List<LovenseMockEvaluationResult> evaluateAction(
+    LovenseActionContext context,
+  ) {
     if (devices.isEmpty) {
       return const <LovenseMockEvaluationResult>[
         LovenseMockEvaluationResult(

@@ -221,6 +221,168 @@ void main() {
       expect(commands[2].action, LovenseMockCommandAction.stop);
     });
 
+    test('supports trigger gap variable aliases', () {
+      final LovenseMockClient client = LovenseMockClient.demo(
+        rulesText:
+            'if gapms < 90 then stop()\n'
+            'else if triggergapms < 140 then vibrate(6, 500)\n'
+            'else vibrate(12, 500)',
+      );
+
+      final List<LovenseMockCommand> rapidCommands = client.sendForAction(
+        const LovenseActionContext(
+          index: 7,
+          atMs: 3000,
+          pos: 60,
+          currentMs: 3003,
+          deltaMs: 3,
+          triggerGapMs: 80,
+        ),
+      );
+      expect(rapidCommands.first.action, LovenseMockCommandAction.stop);
+
+      final List<LovenseMockCommand> mediumCommands = client.sendForAction(
+        const LovenseActionContext(
+          index: 8,
+          atMs: 3120,
+          pos: 60,
+          currentMs: 3124,
+          deltaMs: 4,
+          triggerGapMs: 120,
+        ),
+      );
+      expect(mediumCommands.first.action, LovenseMockCommandAction.vibrate);
+      expect(mediumCommands.first.strength, 6);
+
+      final List<LovenseMockCommand> slowCommands = client.sendForAction(
+        const LovenseActionContext(
+          index: 9,
+          atMs: 3400,
+          pos: 60,
+          currentMs: 3405,
+          deltaMs: 5,
+          triggerGapMs: 280,
+        ),
+      );
+      expect(slowCommands.first.action, LovenseMockCommandAction.vibrate);
+      expect(slowCommands.first.strength, 12);
+    });
+
+    test('supports burststart and burstduration functions', () {
+      final LovenseMockClient client = LovenseMockClient.demo(
+        rulesText:
+            'if burststart(90, 3) >= 1 then vibrate(10, burstduration(90, 3))\n'
+            'else stop()',
+      );
+
+      final List<LovenseMockCommand> burstStartCommands = client.sendForAction(
+        LovenseActionContext(
+          index: 20,
+          atMs: 4000,
+          pos: 70,
+          currentMs: 4002,
+          deltaMs: 2,
+          triggerGapMs: 40,
+          burstStartResolver: (int maxGapMs, int minTriggers) => 1,
+          burstDurationMsResolver: (int maxGapMs, int minTriggers) => 260,
+        ),
+      );
+      expect(burstStartCommands.first.action, LovenseMockCommandAction.vibrate);
+      expect(burstStartCommands.first.durationMs, 260);
+
+      final List<LovenseMockCommand> nonStartCommands = client.sendForAction(
+        LovenseActionContext(
+          index: 21,
+          atMs: 4040,
+          pos: 70,
+          currentMs: 4044,
+          deltaMs: 4,
+          triggerGapMs: 40,
+          burstStartResolver: (int maxGapMs, int minTriggers) => 0,
+          burstDurationMsResolver: (int maxGapMs, int minTriggers) => 0,
+        ),
+      );
+      expect(nonStartCommands.first.action, LovenseMockCommandAction.stop);
+    });
+
+    test('supports burstmember and burstindex to guard follow-up triggers', () {
+      final LovenseMockClient client = LovenseMockClient.demo(
+        rulesText:
+            'if burststart(90, 3) >= 1 then vibrate(10, 900)\n'
+            'else if burstmember(90, 3) >= 1 then stop()\n'
+            'else if burstindex(90, 3) >= 1 then vibrate(4, 300)\n'
+            'else vibrate(6, 300)',
+      );
+
+      final List<LovenseMockCommand> startCommands = client.sendForAction(
+        LovenseActionContext(
+          index: 30,
+          atMs: 5000,
+          pos: 65,
+          currentMs: 5002,
+          deltaMs: 2,
+          triggerGapMs: 40,
+          burstStartResolver: (int maxGapMs, int minTriggers) => 1,
+          burstDurationMsResolver: (int maxGapMs, int minTriggers) => 900,
+          burstMemberResolver: (int maxGapMs, int minTriggers) => 1,
+          burstIndexResolver: (int maxGapMs, int minTriggers) => 1,
+        ),
+      );
+      expect(startCommands.first.action, LovenseMockCommandAction.vibrate);
+      expect(startCommands.first.durationMs, 900);
+
+      final List<LovenseMockCommand> memberCommands = client.sendForAction(
+        LovenseActionContext(
+          index: 31,
+          atMs: 5045,
+          pos: 65,
+          currentMs: 5049,
+          deltaMs: 4,
+          triggerGapMs: 45,
+          burstStartResolver: (int maxGapMs, int minTriggers) => 0,
+          burstDurationMsResolver: (int maxGapMs, int minTriggers) => 0,
+          burstMemberResolver: (int maxGapMs, int minTriggers) => 1,
+          burstIndexResolver: (int maxGapMs, int minTriggers) => 2,
+        ),
+      );
+      expect(memberCommands.first.action, LovenseMockCommandAction.stop);
+    });
+
+    test('supports burstcount function for exact burst length checks', () {
+      final LovenseMockClient client = LovenseMockClient.demo(
+        rulesText:
+            'if burstcount(90) == 5 then vibrate(9, 700)\n'
+            'else stop()',
+      );
+
+      final List<LovenseMockCommand> exactCommands = client.sendForAction(
+        LovenseActionContext(
+          index: 40,
+          atMs: 7000,
+          pos: 68,
+          currentMs: 7004,
+          deltaMs: 4,
+          triggerGapMs: 40,
+          burstCountResolver: (int maxGapMs) => 5,
+        ),
+      );
+      expect(exactCommands.first.action, LovenseMockCommandAction.vibrate);
+      expect(exactCommands.first.strength, 9);
+
+      final List<LovenseMockCommand> nonExactCommands = client.sendForAction(
+        LovenseActionContext(
+          index: 41,
+          atMs: 7080,
+          pos: 68,
+          currentMs: 7084,
+          deltaMs: 4,
+          triggerGapMs: 40,
+          burstCountResolver: (int maxGapMs) => 6,
+        ),
+      );
+      expect(nonExactCommands.first.action, LovenseMockCommandAction.stop);
+    });
+
     test('reports no matching rule branches when no else exists', () {
       final LovenseMockClient client = LovenseMockClient.demo(
         rulesText: 'if pos > 95 then vibrate(10)',

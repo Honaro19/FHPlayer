@@ -129,6 +129,11 @@ C:\Dev\flutter\bin\cache\dart-sdk\bin\dart.exe C:\Dev\flutter\bin\cache\flutter_
 
 3. If errors mention `PathAccessException` under `build\unit_test_assets`, rerun in a less restricted context.
 
+4. Codex sandbox note (important for this repository):
+
+- If `dart`/`flutter` commands appear to hang in Codex, rerun them outside the sandbox.
+- In this environment, `dart --version`, `dart format`, and `flutter test` can stall inside sandboxed execution and complete normally once executed with elevated/out-of-sandbox permissions.
+
 ## CI-Relevant Minimum
 
 Before pushing changes that touch Flutter or Android:

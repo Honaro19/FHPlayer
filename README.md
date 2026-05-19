@@ -441,6 +441,9 @@ Common failure signatures and meaning:
 - `Flutter failed to run "git ...". The flutter tool cannot access the file or directory.`
   - The execution context cannot run required subprocesses (for example `git`) with sufficient access.
   - Re-run outside restrictive sandbox environments.
+- `dart`/`flutter` appears to hang without output in Codex.
+  - In this repository, sandboxed execution can block Dart/Flutter launcher behavior.
+  - Re-run the same command outside sandbox restrictions (elevated/out-of-sandbox execution).
 
 ## Daily Use
 
