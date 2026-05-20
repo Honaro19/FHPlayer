@@ -129,6 +129,15 @@ jobs:
         # For more details on CodeQL's query packs, refer to: https://docs.github.com/en/code-security/code-scanning/automatically-scanning-your-code-for-vulnerabilities-and-errors/configuring-code-scanning#using-queries-in-ql-packs
         queries: +security-extended,security-and-quality
 
+    - name: Resolve Flutter dependencies for Android/Kotlin
+      if: matrix.language == 'java-kotlin'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd fhplayer_flutter
+        flutter pub get
+        test -f .dart_tool/package_config.json
+
     # If the analyze step fails for one of the languages you are analyzing with
     # "We were unable to automatically build your code", modify the matrix above
     # to set the build mode to "manual" for that language. Then modify this step
@@ -143,7 +152,7 @@ jobs:
         set -euo pipefail
         BUILD_DIR="$RUNNER_TEMP/fhplayer-android-build/app"
         mkdir -p "$BUILD_DIR"
-        gradle -p fhplayer_flutter/android "-PfhplayerBuildDir=$BUILD_DIR" clean assembleDebug --no-daemon
+        gradle -p fhplayer_flutter/android "-PfhplayerBuildDir=$BUILD_DIR" clean assembleDebug --no-daemon --stacktrace
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4
