@@ -78,6 +78,14 @@ jobs:
         java-version: '17'
         cache: gradle
 
+    # This repository intentionally does not track gradlew/gradle-wrapper.jar.
+    # Install a matching Gradle version for the Android/Kotlin CodeQL build.
+    - name: Set up Gradle for Android/Kotlin
+      if: matrix.language == 'java-kotlin'
+      uses: gradle/actions/setup-gradle@11d4d83c63a6ce61b32d8a9c4faddbdb04fe9917 # v6.1.0
+      with:
+        gradle-version: '8.14'
+
     # Android builds require an Android SDK on the runner.
     - name: Set up Android SDK for Android/Kotlin
       if: matrix.language == 'java-kotlin'
@@ -127,7 +135,7 @@ jobs:
     # to build your code.
     # Command-line programs to run using the OS shell.
     # See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsrun
-    # The Android project is below fhplayer_flutter/android and includes Gradle wrapper.
+    # Build via installed Gradle (wrapper files are not tracked in this repository).
     - name: Build Android project for CodeQL
       if: matrix.language == 'java-kotlin'
       shell: bash
@@ -135,8 +143,7 @@ jobs:
         set -euo pipefail
         BUILD_DIR="$RUNNER_TEMP/fhplayer-android-build/app"
         mkdir -p "$BUILD_DIR"
-        chmod +x fhplayer_flutter/android/gradlew
-        fhplayer_flutter/android/gradlew -p fhplayer_flutter/android "-PfhplayerBuildDir=$BUILD_DIR" clean assembleDebug --no-daemon
+        gradle -p fhplayer_flutter/android "-PfhplayerBuildDir=$BUILD_DIR" clean assembleDebug --no-daemon
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v4
