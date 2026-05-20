@@ -51,4 +51,33 @@ Write-Host "Stdout:   $($result.Stdout)"
 Write-Host "Stderr:   $($result.Stderr)"
 Write-Host "Meta:     $($result.Meta)"
 
+if ($result.ExitCode -ne 0) {
+    Write-Host ""
+    Write-Warning "Flutter tests failed. Printing captured logs for CI diagnostics."
+
+    if (Test-Path -LiteralPath $result.Stdout) {
+        Write-Host "----- BEGIN STDOUT ($($result.Stdout)) -----"
+        Get-Content -LiteralPath $result.Stdout
+        Write-Host "----- END STDOUT -----"
+    } else {
+        Write-Warning "Missing stdout log: $($result.Stdout)"
+    }
+
+    if (Test-Path -LiteralPath $result.Stderr) {
+        Write-Host "----- BEGIN STDERR ($($result.Stderr)) -----"
+        Get-Content -LiteralPath $result.Stderr
+        Write-Host "----- END STDERR -----"
+    } else {
+        Write-Warning "Missing stderr log: $($result.Stderr)"
+    }
+
+    if (Test-Path -LiteralPath $result.Meta) {
+        Write-Host "----- BEGIN META ($($result.Meta)) -----"
+        Get-Content -LiteralPath $result.Meta
+        Write-Host "----- END META -----"
+    } else {
+        Write-Warning "Missing meta log: $($result.Meta)"
+    }
+}
+
 exit $result.ExitCode

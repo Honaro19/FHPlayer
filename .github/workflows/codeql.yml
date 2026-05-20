@@ -92,6 +92,31 @@ jobs:
       if: matrix.language == 'java-kotlin'
       uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
 
+    - name: Set up Flutter for Android/Kotlin
+      if: matrix.language == 'java-kotlin'
+      uses: subosito/flutter-action@v2
+      with:
+        channel: stable
+
+    - name: Create Android local.properties for CI
+      if: matrix.language == 'java-kotlin'
+      shell: bash
+      run: |
+        set -euo pipefail
+        ANDROID_SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+        if [[ -z "$ANDROID_SDK_PATH" ]]; then
+          echo "ANDROID_SDK_ROOT / ANDROID_HOME is not set."
+          exit 1
+        fi
+        if [[ -z "${FLUTTER_ROOT:-}" ]]; then
+          echo "FLUTTER_ROOT is not set."
+          exit 1
+        fi
+        cat > fhplayer_flutter/android/local.properties <<EOF
+        sdk.dir=$ANDROID_SDK_PATH
+        flutter.sdk=$FLUTTER_ROOT
+        EOF
+
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v4
